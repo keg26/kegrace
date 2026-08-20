@@ -1,0 +1,1805 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KEG RACE 2026 · Ticketing</title>
+
+<!-- Tailwind (utility classes for the Diseño tab controls) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- QR generation (canvas-based) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- QR camera scanning -->
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<!-- PDF export -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- Envío de correo (sin backend) -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --bg: #000000;
+    --panel: #0a0a0a;
+    --panel-2: #111111;
+    --line: rgba(255,255,255,.14);
+    --line-strong: rgba(255,255,255,.28);
+    --text: #f5f5f5;
+    --muted: #8f8f8f;
+    --accent: #e6402b;
+    --accent-dim: rgba(230,64,43,.14);
+    --green: #2ecc71;
+    --yellow: #f4b740;
+  }
+  html, body { background: var(--bg); color: var(--text); font-family: 'Helvetica Neue', Arial, sans-serif; min-height: 100vh; font-size: 14px; -webkit-font-smoothing: antialiased; }
+  body { padding-bottom: 90px; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 18px; }
+  .eyebrow { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+  h1.pagetitle { font-size: 34px; font-weight: 300; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 22px; }
+  h2 { font-size: 16px; font-weight: 500; letter-spacing: .04em; margin-bottom: 12px; text-transform: uppercase; }
+  h3 { font-size: 11px; margin-bottom: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .14em; font-weight: 600; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 20px; margin-bottom: 14px; }
+  input, select, textarea, button { font-family: inherit; font-size: 14px; width: 100%; padding: 12px 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px; color: var(--text); margin-bottom: 10px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 6px; margin-top: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; }
+  button { background: var(--accent); color: #fff; border: 1px solid var(--accent); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .1em; cursor: pointer; transition: opacity .15s; border-radius: 3px; }
+  button:hover { opacity: .88; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button.danger { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  button.success { background: var(--green); border-color: var(--green); color: #052; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px; padding: 16px; text-align: center; }
+  .stat-value { font-size: 24px; font-weight: 300; color: var(--text); letter-spacing: .02em; }
+  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .12em; margin-top: 6px; }
+  .badge { display: inline-block; padding: 3px 9px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+  .badge.green { border-color: var(--green); color: var(--green); }
+  .badge.red { border-color: var(--accent); color: var(--accent); }
+  .badge.orange { border-color: var(--accent); color: var(--accent); }
+  .segtabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .segtab { flex: 0 0 auto; padding: 11px 18px; background: transparent; color: var(--muted); border: 1px solid var(--line-strong); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; margin: 0; width: auto; border-radius: 3px; }
+  .segtab.active { color: var(--accent); border-color: var(--accent); }
+  .topbar { display: flex; justify-content: space-between; align-items: center; padding: 18px; border-bottom: 1px solid var(--line); margin-bottom: 0; flex-wrap: wrap; gap: 10px; }
+  .topbar-brand { display: flex; align-items: center; gap: 12px; }
+  .topbar-mark { width: 30px; height: 30px; border: 1.5px solid var(--accent); color: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; border-radius: 3px; }
+  .topbar-word { font-size: 16px; font-weight: 700; letter-spacing: .12em; }
+  .topbar-meta { display: flex; align-items: center; gap: 14px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; flex-wrap: wrap; }
+  .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 6px; }
+  .topbar-user { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+  .topbar-user b { color: var(--accent); }
+  .content-pad { padding: 22px 18px 0; }
+  .list-item { background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px; padding: 13px 14px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .list-item-main { flex: 1; min-width: 0; }
+  .list-item-title { font-weight: 600; font-size: 14px; letter-spacing: .01em; }
+  .list-item-sub { font-size: 11px; color: var(--muted); margin-top: 3px; letter-spacing: .02em; }
+  .list-item-actions { display: flex; gap: 6px; }
+  .icon-btn { width: 34px; height: 34px; padding: 0; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 15px; margin: 0; }
+  #reader { width: 100% !important; border-radius: 4px !important; overflow: hidden; border: 1px solid var(--line); }
+  #reader video { border-radius: 4px; }
+  .reader-wrap { position: relative; }
+  .reader-grid-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  .reader-frame { position: relative; width: 62%; max-width: 260px; aspect-ratio: 1 / 1; }
+  .reader-frame .corner { position: absolute; width: 26px; height: 26px; border: 3px solid var(--accent); }
+  .reader-frame .corner.tl { top: -2px; left: -2px; border-right: none; border-bottom: none; }
+  .reader-frame .corner.tr { top: -2px; right: -2px; border-left: none; border-bottom: none; }
+  .reader-frame .corner.bl { bottom: -2px; left: -2px; border-right: none; border-top: none; }
+  .reader-frame .corner.br { bottom: -2px; right: -2px; border-left: none; border-top: none; }
+  .reader-frame .grid-line { position: absolute; background: rgba(255,255,255,.35); }
+  .reader-frame .grid-line.h { left: 0; right: 0; height: 1px; }
+  .reader-frame .grid-line.v { top: 0; bottom: 0; width: 1px; }
+  .scan-result { padding: 22px; border-radius: 4px; text-align: center; margin-top: 14px; font-weight: 600; border: 1px solid; }
+  .scan-result.valid { background: rgba(46,204,113,.08); border-color: var(--green); }
+  .scan-result.invalid { background: rgba(230,64,43,.08); border-color: var(--accent); }
+  .scan-result.used { background: rgba(244,183,64,.08); border-color: var(--yellow); }
+  .scan-result-title { font-size: 19px; margin-bottom: 8px; letter-spacing: .08em; text-transform: uppercase; }
+  .scan-result-body { font-size: 13px; opacity: .9; }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
+  .modal-backdrop.active { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 22px; max-width: 440px; width: 100%; max-height: 92vh; overflow-y: auto; }
+  .empty { text-align: center; padding: 34px 20px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  .divider { height: 1px; background: var(--line); margin: 16px 0; }
+  .role-btn { padding: 22px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); margin-bottom: 10px; border-radius: 3px; }
+  .role-btn:hover { border-color: var(--accent); }
+  .role-title { font-size: 13px; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; letter-spacing: .08em; }
+  .role-desc { font-size: 11px; color: var(--muted); text-transform: none; letter-spacing: .02em; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line-strong); padding: 12px 20px; border-radius: 3px; z-index: 2000; box-shadow: 0 10px 40px rgba(0,0,0,.6); display: none; max-width: 90%; text-align: center; font-size: 12px; letter-spacing: .04em; }
+  .toast.show { display: block; animation: fadeIn .2s; }
+  @keyframes fadeIn { from{opacity:0; transform:translateX(-50%) translateY(10px)} to{opacity:1; transform:translateX(-50%) translateY(0)} }
+  .warn { background: rgba(244,183,64,.08); border: 1px solid var(--yellow); color: var(--yellow); padding: 11px 12px; border-radius: 3px; font-size: 11px; margin-bottom: 12px; letter-spacing: .02em; }
+  .info-note { background: rgba(255,255,255,.04); border: 1px solid var(--line); color: var(--muted); padding: 11px 12px; border-radius: 3px; font-size: 11px; margin-bottom: 12px; letter-spacing: .02em; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+  .overflow-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .ticket-canvas-wrap { background: #fff; border-radius: 4px; padding: 8px; display: flex; justify-content: center; }
+  .ticket-canvas-wrap canvas { max-width: 100%; height: auto; border-radius: 2px; display: block; }
+  .upload-zone { border: 1px dashed var(--line-strong); border-radius: 4px; padding: 26px; text-align: center; cursor: pointer; }
+  .upload-zone:hover { border-color: var(--accent); }
+  input[type=range] { padding: 0; background: transparent; accent-color: var(--accent); }
+  input[type=color] { padding: 4px; height: 44px; }
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+<div id="toast" class="toast"></div>
+<div id="modal" class="modal-backdrop"><div id="modalContent" class="modal"></div></div>
+
+<script src="firebase-config.js"></script>
+<script type="module">
+  // Imports adicionales de Firestore/Storage que necesita el resto de la app
+  // (además de los que pediste explícitamente abajo)
+  import {
+    setDoc, getDoc, deleteDoc, serverTimestamp, orderBy, limit,
+    writeBatch, runTransaction, getCountFromServer
+  } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+  import {
+    getStorage, ref as storageRefFn, uploadBytes, getDownloadURL, deleteObject
+  } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js';
+
+  import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+  import {
+    getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+    createUserWithEmailAndPassword, setPersistence, browserLocalPersistence
+  } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
+  import { getFirestore, collection, addDoc, onSnapshot, doc, updateDoc, query, where, getDocs } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+  /* Las claves viven en firebase-config.js — un solo archivo para editar. */
+  const firebaseConfig = window.KEGRACE_FIREBASE;
+  if (!firebaseConfig || !firebaseConfig.projectId || firebaseConfig.projectId === 'PEGA-AQUI-TU-PROJECT-ID') {
+    document.getElementById('app').innerHTML =
+      '<div class="wrap content-pad"><div class="card"><div class="warn">' +
+      'Falta configurar <b>firebase-config.js</b>.<br><br>' +
+      'Abri ese archivo y pega ahi los datos de tu proyecto de Firebase ' +
+      '(Configuracion del proyecto &rarr; Tus apps &rarr; Configuracion del SDK).' +
+      '</div></div></div>';
+    throw new Error('firebase-config.js sin configurar');
+  }
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+  /* La sesion queda guardada en el navegador: cada persona entra UNA vez
+     por dispositivo y no vuelve a escribir la contrasena. */
+  setPersistence(auth, browserLocalPersistence).catch(()=>{});
+
+  /* Los correos son internos, no reciben nada. Sirven solo como usuario. */
+  const EMAIL_DOMAIN = 'kegrace.app';
+  function toEmail(u) {
+    u = String(u || '').trim().toLowerCase();
+    return u.includes('@') ? u : (u.replace(/\s+/g, '.') + '@' + EMAIL_DOMAIN);
+  }
+  // ... resto de la lógica de React/JS
+
+  const storage = getStorage(app);
+  function fileRef(path) { return storageRefFn(storage, path); }
+
+/* =====================================================================
+   KEG RACE 2026 · Ticketing System — Firebase v9 modular edition
+   Firestore layout:
+     roles (collection) / {uid}: { role: admin|embajador|puerta, name, ambassadorId }
+     config (collection) / main (doc): { eventInfo,
+        ticketTypes: [{id,name,price,color,capacity}],
+        template: { url, path }, stamp: {...} }
+     ambassadors (collection): { name, pin, commissionPerTicket, createdAt }
+     ventas (collection, doc ID = idBoleto): {
+        idBoleto, nombreComprador, telefono, embajador, metodoPago,
+        tipoEntrada, precio, fechaVenta, ingresado
+     }
+===================================================================== */
+
+const DEFAULT_CONFIG = {
+  eventInfo: {
+    name: 'KEG RACE 2026',
+    date: '31 de Octubre, 2026',
+    venue: 'Museo MARTE',
+    rules: 'No confetti · Música en vivo hasta 11 PM'
+  },
+  ticketTypes: [
+    { id: 'tt_earlybird', name: 'Early Bird', price: 20, color: '#e6402b', capacity: 200 },
+    { id: 'tt_general',   name: 'General',    price: 30, color: '#e6402b', capacity: 600 },
+    { id: 'tt_vip',       name: 'VIP',        price: 50, color: '#e6402b', capacity: 150 },
+    { id: 'tt_couples',   name: 'Pareja',     price: 55, color: '#e6402b', capacity: 50 }
+  ],
+  template: { url: null, path: null },
+  stamp: { qrXPct: 66, qrYPct: 60, qrSizePct: 26, textXPct: 66, textYPct: 88, fontColor: '#111111', fontSizePct: 3.4 }
+};
+
+/* ---------- UTILS ---------- */
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function fmtMoney(n) { return '$' + Number(n || 0).toFixed(2); }
+function fmtDate(tsOrMillis) {
+  let d;
+  if (!tsOrMillis) return '—';
+  if (tsOrMillis.toDate) d = tsOrMillis.toDate();
+  else d = new Date(tsOrMillis);
+  return d.toLocaleDateString('es-SV') + ' ' + d.toLocaleTimeString('es-SV', {hour:'2-digit',minute:'2-digit'});
+}
+function daysUntil(dateLike) {
+  try {
+    const target = new Date(dateLike);
+    if (isNaN(target.getTime())) return null;
+    const diff = Math.ceil((target - new Date()) / 86400000);
+    return diff;
+  } catch(e) { return null; }
+}
+function esc(s) { return String(s == null ? '' : s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(msg, ms = 2400) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), ms);
+}
+function openModal(html) {
+  document.getElementById('modalContent').innerHTML = html;
+  document.getElementById('modal').classList.add('active');
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('active');
+  document.getElementById('modalContent').innerHTML = '';
+}
+document.getElementById('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+
+const TICKET_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function randomTicketSuffix(len = 5) {
+  let s = '';
+  for (let i = 0; i < len; i++) s += TICKET_ID_ALPHABET[Math.floor(Math.random() * TICKET_ID_ALPHABET.length)];
+  return s;
+}
+/* Token largo e impredecible que va DENTRO del QR.
+   22 caracteres base62 = ~131 bits de entropía. Aunque alguien viera la base
+   de datos completa, no puede deducir ni inventar el token de otra entrada:
+   adivinar uno al azar es tan probable como acertar la lotería varias veces
+   seguidas. El idBoleto (KR-XXXXX) sigue existiendo, pero solo como código
+   legible para buscar a la persona por nombre en la puerta. */
+const TOKEN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function generateTicketToken(len = 22) {
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  let s = '';
+  for (let i = 0; i < len; i++) s += TOKEN_ALPHABET[bytes[i] % TOKEN_ALPHABET.length];
+  return s;
+}
+
+async function generateUniqueTicketId() {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const id = 'KR-' + randomTicketSuffix(5);
+    const snap = await getDoc(doc(db, 'ventas', id));
+    if (!snap.exists()) return id;
+  }
+  return 'KR-' + randomTicketSuffix(7);
+}
+
+/* ---------- ROLES ---------- */
+async function getMyRole(uid) {
+  const snap = await getDoc(doc(db, 'roles', uid));
+  return snap.exists() ? snap.data() : null;
+}
+
+/* ---------- FIRESTORE DATA LAYER (v9 modular) ---------- */
+async function getConfig() {
+  const ref = doc(db, 'config', 'main');
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) return Object.assign({}, DEFAULT_CONFIG, snap.data());
+    /* Solo el admin puede crear la config inicial: las reglas bloquean
+       a todos los demas, asi que ni lo intentamos con otro rol. */
+    if (state.role === 'admin') { await setDoc(ref, DEFAULT_CONFIG); }
+    return DEFAULT_CONFIG;
+  } catch (e) {
+    console.warn('getConfig', e);
+    return DEFAULT_CONFIG;
+  }
+}
+async function saveConfig(patch) {
+  await setDoc(doc(db, 'config', 'main'), patch, { merge: true });
+}
+
+async function getAmbassadors() {
+  const snap = await getDocs(query(collection(db, 'ambassadors'), orderBy('createdAt', 'asc')));
+  return snap.docs.map(d => Object.assign({ id: d.id }, d.data()));
+}
+async function saveAmbassador(id, data) {
+  if (id) return setDoc(doc(db, 'ambassadors', id), data, { merge: true });
+  return addDoc(collection(db, 'ambassadors'), Object.assign({}, data, { createdAt: serverTimestamp() }));
+}
+async function removeAmbassadorDoc(id) {
+  return deleteDoc(doc(db, 'ambassadors', id));
+}
+
+async function getVentas() {
+  const snap = await getDocs(query(collection(db, 'ventas'), orderBy('fechaVenta', 'desc')));
+  return snap.docs.map(d => d.data());
+}
+async function countVentasByType(ticketTypeId) {
+  const snap = await getCountFromServer(query(collection(db, 'ventas'), where('ticketTypeId', '==', ticketTypeId)));
+  return snap.data().count;
+}
+async function createVenta(sale) {
+  await setDoc(doc(db, 'ventas', sale.idBoleto), sale);
+}
+
+/* Realtime listeners (returns unsubscribe fn) */
+function listenVentas(cb) {
+  return onSnapshot(query(collection(db, 'ventas'), orderBy('fechaVenta', 'desc')), snap => {
+    cb(snap.docs.map(d => d.data()));
+  }, err => console.error('listenVentas', err));
+}
+function listenAmbassadors(cb) {
+  return onSnapshot(query(collection(db, 'ambassadors'), orderBy('createdAt', 'asc')), snap => {
+    cb(snap.docs.map(d => Object.assign({ id: d.id }, d.data())));
+  }, err => console.error('listenAmbassadors', err));
+}
+function listenVentasByAmbassador(ambassadorId, cb) {
+  return onSnapshot(query(collection(db, 'ventas'), where('ambassadorId', '==', ambassadorId)), snap => {
+    cb(snap.docs.map(d => d.data()));
+  }, err => console.error('listenVentasByAmbassador', err));
+}
+
+/* ---------- STATE ---------- */
+const state = {
+  role: null, userId: null, userName: null, scannerInstance: null,
+  adminTab: 'dashboard', ambassadorTab: 'sell', unsubs: []
+};
+function clearUnsubs() { state.unsubs.forEach(u => { try { u(); } catch(e){} }); state.unsubs = []; }
+
+/* ---------- ROUTER ---------- */
+async function render() {
+  clearUnsubs();
+  if (state.scannerInstance && state.role !== 'scanner') {
+    try { await state.scannerInstance.stop(); } catch(e) {}
+    state.scannerInstance = null;
+  }
+  const app = document.getElementById('app');
+  if (!state.role) return renderLogin(app);
+  if (state.role === 'admin')      return renderAdmin(app);
+  if (state.role === 'ambassador') return renderAmbassador(app);
+  if (state.role === 'scanner')    return renderScanner(app);
+}
+
+/* ================== TOP BAR / HEADER ================== */
+function brandBar(cfg, roleLabel) {
+  const days = cfg && cfg.eventInfo ? daysUntil(cfg.eventInfo.rawDate || cfg.eventInfo.date) : null;
+  const daysLabel = (days !== null && !isNaN(days)) ? `FALTAN ${days} DÍAS` : (cfg?.eventInfo?.date || '');
+  return `
+    <div class="topbar">
+      <div class="topbar-brand">
+        <div class="topbar-mark">KR</div>
+        <div class="topbar-word">WEAREKEG</div>
+      </div>
+      <div class="topbar-meta">
+        <span><span class="live-dot"></span>EN VIVO</span>
+        <span>${esc(cfg?.eventInfo?.date || '')}</span>
+        <span>—</span>
+        <span>${esc(cfg?.eventInfo?.venue || '')}</span>
+        ${days !== null && !isNaN(days) ? `<span style="color:var(--accent); font-weight:700;">${esc(daysLabel)}</span>` : ''}
+      </div>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div class="topbar-user">${esc(roleLabel)} · <b>${esc(state.userName || '')}</b></div>
+        <button class="ghost" style="width:auto; padding:9px 14px; margin:0;" onclick="logout()">Salir</button>
+      </div>
+    </div>
+  `;
+}
+
+/* ================== LOGIN (Firebase Auth) ================== */
+function renderLogin(app) {
+  app.innerHTML = `
+    <div class="topbar" style="border-bottom:1px solid var(--line);">
+      <div class="topbar-brand">
+        <div class="topbar-mark">KR</div>
+        <div class="topbar-word">WEAREKEG</div>
+      </div>
+      <div class="topbar-meta"><span><span class="live-dot"></span>SISTEMA DE TICKETING</span></div>
+    </div>
+    <div class="wrap content-pad">
+      <div class="eyebrow">Halloween Edition · 1,000 asistentes</div>
+      <h1 class="pagetitle">Ingresar</h1>
+      <div class="card">
+        <label>Usuario</label>
+        <input id="lgUser" autocapitalize="off" autocorrect="off" spellcheck="false"
+               placeholder="Ej: admin o juan.perez">
+        <label>Contrase&ntilde;a</label>
+        <input id="lgPass" type="password" placeholder="Tu contrase&ntilde;a">
+        <button id="lgBtn" onclick="doLogin()" style="margin-top:14px;">Entrar</button>
+        <div id="lgErr" class="warn" style="display:none; margin-top:12px;"></div>
+      </div>
+      <div class="info-note">
+        Cada persona tiene su propio usuario. Si no ten&eacute;s uno, ped&iacute;selo al administrador.
+        La sesi&oacute;n queda guardada en este dispositivo.
+      </div>
+    </div>
+  `;
+  const p = document.getElementById('lgPass');
+  if (p) p.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+}
+
+async function doLogin() {
+  const btn = document.getElementById('lgBtn');
+  const err = document.getElementById('lgErr');
+  const user = document.getElementById('lgUser').value.trim();
+  const pass = document.getElementById('lgPass').value;
+  if (!user || !pass) return toast('Escrib&iacute; usuario y contrase&ntilde;a');
+  btn.disabled = true; btn.textContent = 'Entrando...';
+  err.style.display = 'none';
+  try {
+    await signInWithEmailAndPassword(auth, toEmail(user), pass);
+    // onAuthStateChanged se encarga del resto
+  } catch (e) {
+    const map = {
+      'auth/invalid-credential': 'Usuario o contrase&ntilde;a incorrectos.',
+      'auth/user-not-found':     'Ese usuario no existe.',
+      'auth/wrong-password':     'Contrase&ntilde;a incorrecta.',
+      'auth/too-many-requests':  'Demasiados intentos. Esper&aacute; un minuto.',
+      'auth/network-request-failed': 'Sin conexi&oacute;n a internet.'
+    };
+    err.innerHTML = map[e.code] || ('No se pudo entrar: ' + esc(e.message || e));
+    err.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Entrar';
+  }
+}
+
+async function applySession(user) {
+  if (!user) {
+    state.role = null; state.userId = null; state.userName = null;
+    return render();
+  }
+  let r = null;
+  try { r = await getMyRole(user.uid); } catch (e) {}
+  if (!r || !r.role) {
+    await signOut(auth);
+    const app = document.getElementById('app');
+    app.innerHTML = `<div class="wrap content-pad"><div class="card"><div class="warn">
+      Tu cuenta existe pero no tiene un rol asignado todav&iacute;a.<br><br>
+      El administrador debe crear el documento <b>roles/${esc(user.uid)}</b> en Firestore.<br><br>
+      <b>Tu UID:</b> <code>${esc(user.uid)}</code>
+      </div><button onclick="location.reload()">Volver</button></div></div>`;
+    return;
+  }
+  state.role     = r.role === 'embajador' ? 'ambassador'
+                 : r.role === 'puerta'    ? 'scanner'
+                 : 'admin';
+  state.userId   = r.ambassadorId || user.uid;
+  state.userName = r.name || user.email.split('@')[0];
+  render();
+}
+
+function logout() {
+  signOut(auth).catch(()=>{});
+  state.role = null; state.userId = null; state.userName = null;
+  render();
+}
+
+/* ================== ADMIN ================== */
+const ADMIN_TAB_LABELS = { dashboard:'Tablero', sales:'Ventas', access:'Acceso', ambassadors:'Embajadores', tickets:'Entradas', design:'Diseño', settings:'Ajustes' };
+
+async function renderAdmin(app) {
+  const cfg = await getConfig();
+  app.innerHTML = `
+    ${brandBar(cfg, 'ADMIN')}
+    <div class="wrap content-pad">
+      <div class="eyebrow">Panel de administración</div>
+      <h1 class="pagetitle">${esc(ADMIN_TAB_LABELS[state.adminTab] || 'Tablero')}</h1>
+      <div class="segtabs">
+        <button class="segtab ${state.adminTab==='dashboard'?'active':''}" onclick="setAdminTab('dashboard')">Tablero</button>
+        <button class="segtab ${state.adminTab==='sales'?'active':''}" onclick="setAdminTab('sales')">Ventas</button>
+        <button class="segtab ${state.adminTab==='access'?'active':''}" onclick="setAdminTab('access')">Acceso</button>
+        <button class="segtab ${state.adminTab==='ambassadors'?'active':''}" onclick="setAdminTab('ambassadors')">Embajadores</button>
+        <button class="segtab ${state.adminTab==='tickets'?'active':''}" onclick="setAdminTab('tickets')">Entradas</button>
+        <button class="segtab ${state.adminTab==='design'?'active':''}" onclick="setAdminTab('design')">Diseño</button>
+        <button class="segtab ${state.adminTab==='settings'?'active':''}" onclick="setAdminTab('settings')">Ajustes</button>
+      </div>
+      <div id="adminContent"><div class="empty">Cargando…</div></div>
+    </div>
+  `;
+  const content = document.getElementById('adminContent');
+
+  if (state.adminTab === 'dashboard') {
+    // Dos listeners en tiempo real compartiendo caché local, en vez de mezclar
+    // un listener con un getDocs() de golpe cada vez que cambia el otro dato
+    // (eso multiplicaba lecturas innecesarias contra la cuota gratis de Firestore).
+    let _cacheVentas = null, _cacheAmbs = null;
+    const tryRender = () => { if (_cacheVentas && _cacheAmbs) content.innerHTML = adminDashboard(cfg, _cacheAmbs, _cacheVentas); };
+    const unsubV = listenVentas(ventas => { _cacheVentas = ventas; tryRender(); });
+    const unsubA = listenAmbassadors(ambs => { _cacheAmbs = ambs; tryRender(); });
+    state.unsubs.push(unsubV, unsubA);
+  } else if (state.adminTab === 'sales') {
+    const unsubV = listenVentas(ventas => { content.innerHTML = adminSales(cfg, ventas); });
+    state.unsubs.push(unsubV);
+  } else if (state.adminTab === 'access') {
+    const unsubV = listenVentas(ventas => { content.innerHTML = adminAccess(cfg, ventas); });
+    state.unsubs.push(unsubV);
+  } else if (state.adminTab === 'ambassadors') {
+    let _cacheVentas2 = null, _cacheAmbs2 = null;
+    const tryRender2 = () => { if (_cacheVentas2 && _cacheAmbs2) content.innerHTML = adminAmbassadors(_cacheAmbs2, _cacheVentas2); };
+    const unsubA = listenAmbassadors(ambs => { _cacheAmbs2 = ambs; tryRender2(); });
+    const unsubV = listenVentas(ventas => { _cacheVentas2 = ventas; tryRender2(); });
+    state.unsubs.push(unsubA, unsubV);
+  } else if (state.adminTab === 'tickets') {
+    const ventas = await getVentas();
+    content.innerHTML = adminTickets(cfg, ventas);
+  } else if (state.adminTab === 'design') {
+    content.innerHTML = adminDesign(cfg);
+    setupDesignTab(cfg);
+  } else if (state.adminTab === 'settings') {
+    content.innerHTML = adminSettings(cfg);
+  }
+}
+function setAdminTab(t) { state.adminTab = t; render(); }
+
+function adminDashboard(cfg, ambs, ventas) {
+  const totalRevenue = ventas.reduce((s,v) => s + Number(v.precio||0), 0);
+  const totalSold = ventas.length;
+  const totalChecked = ventas.filter(v => v.ingresado).length;
+
+  const byType = cfg.ticketTypes.map(tt => {
+    const sold = ventas.filter(v => v.ticketTypeId === tt.id);
+    return { ...tt, sold: sold.length, revenue: sold.reduce((s,v)=>s+Number(v.precio||0),0), remaining: Math.max(0, tt.capacity - sold.length) };
+  });
+
+  const byAmb = ambs.map(a => {
+    const vs = ventas.filter(v => v.ambassadorId === a.id);
+    return { ...a, sold: vs.length, revenue: vs.reduce((s,v)=>s+Number(v.precio||0),0), commission: vs.length * Number(a.commissionPerTicket||0) };
+  }).sort((a,b) => b.sold - a.sold);
+
+  return `
+    <div class="card">
+      <h3>Ingresos</h3>
+      <div class="grid-2">
+        <div class="stat"><div class="stat-value">${fmtMoney(totalRevenue)}</div><div class="stat-label">Total</div></div>
+        <div class="stat"><div class="stat-value">${totalSold}</div><div class="stat-label">Entradas vendidas</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Ingreso al evento</h3>
+      <div class="grid-2">
+        <div class="stat"><div class="stat-value" style="color:var(--green)">${totalChecked}</div><div class="stat-label">Ingresados</div></div>
+        <div class="stat"><div class="stat-value">${totalSold-totalChecked}</div><div class="stat-label">Faltan</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Por tipo de entrada</h3>
+      ${byType.map(t => `
+        <div class="list-item">
+          <div class="list-item-main">
+            <div class="list-item-title"><span class="badge red">${esc(t.name)}</span> ${fmtMoney(t.price)}</div>
+            <div class="list-item-sub">${t.sold}/${t.capacity} vendidas · ${fmtMoney(t.revenue)}</div>
+          </div>
+          <div style="width:60px; text-align:right; font-weight:700; color:var(--accent)">${t.remaining}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="card">
+      <h3>Embajadores (tiempo real)</h3>
+      ${byAmb.length===0 ? '<div class="empty">Aún no hay embajadores.</div>' :
+        byAmb.slice(0,10).map((a,i) => `
+        <div class="list-item">
+          <div class="list-item-main">
+            <div class="list-item-title">${i+1}. ${esc(a.name)}</div>
+            <div class="list-item-sub">${a.sold} entradas · Comisión: ${fmtMoney(a.commission)}</div>
+          </div>
+          <div style="text-align:right; font-weight:700; color:var(--accent)">${fmtMoney(a.revenue)}</div>
+        </div>`).join('')
+      }
+    </div>
+  `;
+}
+
+function adminSales(cfg, ventas) {
+  const typeMap = Object.fromEntries(cfg.ticketTypes.map(t => [t.id, t]));
+  return `
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h3 style="margin:0">Todas las ventas (${ventas.length})</h3>
+        <button class="secondary" style="width:auto; padding:9px 16px; margin:0;" onclick="exportCSV()">Exportar CSV</button>
+      </div>
+      ${ventas.length===0 ? '<div class="empty">Aún no hay ventas registradas.</div>' :
+        `<div class="overflow-x"><table>
+          <thead><tr><th>Fecha</th><th>Comprador</th><th>Tipo</th><th>Embajador</th><th>Precio</th><th>Pago</th><th>Estado</th><th>ID</th><th></th></tr></thead>
+          <tbody>
+          ${ventas.map(v => `<tr>
+            <td>${fmtDate(v.fechaVenta)}</td>
+            <td>${esc(v.nombreComprador)}<br><span style="color:var(--muted); font-size:11px">DUI: ${esc(v.dui||'—')}${v.telefono ? ' · '+esc(v.telefono) : ''}</span></td>
+            <td><span class="badge red">${esc(v.tipoEntrada||'?')}</span></td>
+            <td>${esc(v.embajador||'?')}</td>
+            <td>${fmtMoney(v.precio)}</td>
+            <td>${esc(v.metodoPago||'')}</td>
+            <td>${v.ingresado ? '<span class="badge green">Ingresado</span>' : '<span class="badge orange">Válido</span>'}</td>
+            <td style="font-family:monospace; font-size:11px;">${esc(v.idBoleto)}</td>
+            <td><button class="icon-btn secondary" onclick="viewTicket('${v.idBoleto}')">Ver</button></td>
+          </tr>`).join('')}
+          </tbody>
+        </table></div>`
+      }
+    </div>
+  `;
+}
+
+function adminAccess(cfg, ventas) {
+  const total = ventas.length;
+  const ingresados = ventas.filter(v => v.ingresado);
+  const sorted = [...ingresados].sort((a,b) => {
+    const ta = a.fechaIngreso?.toMillis?.() || 0;
+    const tb = b.fechaIngreso?.toMillis?.() || 0;
+    return tb - ta;
+  });
+  return `
+    <div class="card">
+      <div class="grid-2">
+        <div class="stat"><div class="stat-value" style="color:var(--green)">${ingresados.length}</div><div class="stat-label">Ingresados</div></div>
+        <div class="stat"><div class="stat-value">${total - ingresados.length}</div><div class="stat-label">Faltan por ingresar</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Registro de acceso (${ingresados.length})</h3>
+      ${sorted.length===0 ? '<div class="empty">Aún no ha ingresado nadie al evento.</div>' :
+        sorted.map(v => `<div class="list-item">
+          <div class="list-item-main">
+            <div class="list-item-title">${esc(v.nombreComprador)}</div>
+            <div class="list-item-sub">
+              <span class="badge red">${esc(v.tipoEntrada||'?')}</span>
+              · Vendido por ${esc(v.embajador||'?')}
+              ${v.fechaIngreso ? '· Entró a las ' + fmtDate(v.fechaIngreso) : ''}
+            </div>
+          </div>
+          <button class="icon-btn secondary" onclick="viewTicket('${v.idBoleto}')">Ver</button>
+        </div>`).join('')
+      }
+    </div>
+  `;
+}
+
+function adminAmbassadors(ambs, ventas) {
+  return `
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h3 style="margin:0">Embajadores (${ambs.length})</h3>
+        <button style="width:auto; padding:9px 16px; margin:0;" onclick="editAmbassador()">+ Nuevo</button>
+      </div>
+      ${ambs.length===0 ? '<div class="empty">Crea tu primer embajador. Cada uno recibe su propio usuario y contraseña.</div>' :
+        ambs.map(a => {
+          const vs = ventas.filter(v => v.ambassadorId === a.id);
+          const comm = vs.length * Number(a.commissionPerTicket||0);
+          return `<div class="list-item">
+            <div class="list-item-main">
+              <div class="list-item-title">${esc(a.name)}</div>
+              <div class="list-item-sub">Usuario: <b>${esc(a.email||'—')}</b> · Comisión: ${fmtMoney(a.commissionPerTicket)}/entrada · Ventas: ${vs.length} · Total: ${fmtMoney(comm)}</div>
+            </div>
+            <div class="list-item-actions">
+              <button class="icon-btn secondary" onclick="editAmbassador('${a.id}')">Ed.</button>
+              <button class="icon-btn danger" onclick="removeAmbassador('${a.id}')">✕</button>
+            </div>
+          </div>`;
+        }).join('')
+      }
+    </div>
+  `;
+}
+
+async function editAmbassador(id) {
+  let a = { name:'', email:'', commissionPerTicket:3 };
+  if (id) { const ambs = await getAmbassadors(); a = ambs.find(x=>x.id===id) || a; }
+  openModal(`
+    <h2>${id?'Editar':'Nuevo'} embajador</h2>
+    <label>Nombre</label>
+    <input id="mAmbName" value="${esc(a.name)}" placeholder="Ej: Juan Pérez">
+    ${id ? `
+      <label>Usuario</label>
+      <input value="${esc(a.email||'—')}" disabled>
+      <div class="info-note">El usuario y la contraseña no se cambian desde aquí.
+        Para resetear la contraseña entrá a Firebase → Authentication.</div>
+    ` : `
+      <label>Usuario (sin espacios, se le agrega @kegrace.app)</label>
+      <input id="mAmbUser" autocapitalize="off" spellcheck="false" placeholder="Ej: juan.perez">
+      <label>Contraseña (mínimo 6 caracteres)</label>
+      <input id="mAmbPass" placeholder="Se la entregás en persona">
+      <div class="info-note">Se le crea una cuenta real. Anotá la contraseña: no se puede volver a ver.</div>
+    `}
+    <label>Comisión por entrada vendida ($)</label>
+    <input id="mAmbComm" type="number" step="0.01" value="${a.commissionPerTicket}">
+    <div class="row" style="margin-top:14px;">
+      <button class="secondary" onclick="closeModal()">Cancelar</button>
+      <button id="mAmbSave" onclick="saveAmbassadorModal('${id||''}')">Guardar</button>
+    </div>
+  `);
+}
+
+async function saveAmbassadorModal(id) {
+  const btn  = document.getElementById('mAmbSave');
+  const name = document.getElementById('mAmbName').value.trim();
+  const comm = Number(document.getElementById('mAmbComm').value);
+  if (!name) return toast('Escribí el nombre');
+
+  // --- Editar: solo datos, sin tocar la cuenta ---
+  if (id) {
+    await saveAmbassador(id, { name, commissionPerTicket: comm });
+    closeModal(); toast('Guardado'); render();
+    return;
+  }
+
+  // --- Nuevo: crear cuenta real + rol ---
+  const user = document.getElementById('mAmbUser').value.trim();
+  const pass = document.getElementById('mAmbPass').value;
+  if (!user) return toast('Escribí el usuario');
+  if (!pass || pass.length < 6) return toast('La contraseña necesita 6 caracteres o más');
+
+  btn.disabled = true; btn.textContent = 'Creando cuenta…';
+
+  /* Truco importante: creamos al embajador desde una instancia SECUNDARIA
+     de Firebase. Si lo hiciéramos con la principal, el navegador cambiaría
+     tu sesión de admin por la del embajador recién creado y te sacaría. */
+  let sec = null, ambId = null;
+  try {
+    sec = initializeApp(firebaseConfig, 'secondary_' + Date.now());
+    const secAuth = getAuth(sec);
+    const cred = await createUserWithEmailAndPassword(secAuth, toEmail(user), pass);
+    const uid = cred.user.uid;
+    await signOut(secAuth);
+
+    const ref = await addDoc(collection(db, 'ambassadors'), {
+      name, email: toEmail(user), uid,
+      commissionPerTicket: comm, createdAt: serverTimestamp()
+    });
+    ambId = ref.id;
+
+    await setDoc(doc(db, 'roles', uid), {
+      role: 'embajador', name, ambassadorId: ambId, email: toEmail(user)
+    });
+
+    closeModal();
+    toast('Embajador creado: ' + toEmail(user));
+    render();
+  } catch (e) {
+    if (ambId) { try { await removeAmbassadorDoc(ambId); } catch(x){} }
+    const map = {
+      'auth/email-already-in-use': 'Ese usuario ya existe. Probá con otro.',
+      'auth/weak-password': 'La contraseña es muy débil.',
+      'auth/invalid-email': 'El usuario tiene caracteres no permitidos.',
+      'auth/operation-not-allowed': 'Activá Correo/Contraseña en Firebase → Authentication → Sign-in method.'
+    };
+    toast(map[e.code] || ('Error: ' + (e.message || e)));
+    btn.disabled = false; btn.textContent = 'Guardar';
+  } finally {
+    if (sec) { try { await deleteApp(sec); } catch(x){} }
+  }
+}
+
+async function removeAmbassador(id) {
+  if (!confirm('¿Eliminar este embajador? Sus ventas anteriores se mantienen.')) return;
+  await removeAmbassadorDoc(id);
+  toast('Eliminado'); render();
+}
+
+function adminTickets(cfg, ventas) {
+  return `
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h3 style="margin:0">Tipos de entrada</h3>
+        <button style="width:auto; padding:9px 16px; margin:0;" onclick="editTicketType()">+ Nueva</button>
+      </div>
+      ${cfg.ticketTypes.map(t => {
+        const sold = ventas.filter(v => v.ticketTypeId === t.id).length;
+        return `<div class="list-item">
+          <div class="list-item-main">
+            <div class="list-item-title"><span class="badge red">${esc(t.name)}</span> ${fmtMoney(t.price)}</div>
+            <div class="list-item-sub">Cupo: ${t.capacity} · Vendidas: ${sold} · Disponibles: ${Math.max(0,t.capacity-sold)}</div>
+          </div>
+          <div class="list-item-actions">
+            <button class="icon-btn secondary" onclick="editTicketType('${t.id}')">Ed.</button>
+            <button class="icon-btn danger" onclick="removeTicketType('${t.id}')">✕</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+}
+async function editTicketType(id) {
+  const cfg = await getConfig();
+  const t = id ? cfg.ticketTypes.find(x=>x.id===id) : { name:'', price:0, capacity:100, color:'#e6402b' };
+  openModal(`
+    <h2>${id?'Editar':'Nueva'} entrada</h2>
+    <label>Nombre</label>
+    <input id="mTName" value="${esc(t.name)}" placeholder="Ej: VIP">
+    <label>Precio (USD)</label>
+    <input id="mTPrice" type="number" step="0.01" value="${t.price}">
+    <label>Cupo total</label>
+    <input id="mTCap" type="number" value="${t.capacity}">
+    <label>Color</label>
+    <input id="mTColor" type="color" value="${t.color}">
+    <div class="row" style="margin-top:14px;">
+      <button class="secondary" onclick="closeModal()">Cancelar</button>
+      <button onclick="saveTicketTypeModal('${id||''}')">Guardar</button>
+    </div>
+  `);
+}
+async function saveTicketTypeModal(id) {
+  const cfg = await getConfig();
+  const name = document.getElementById('mTName').value.trim();
+  const price = Number(document.getElementById('mTPrice').value);
+  const capacity = Number(document.getElementById('mTCap').value);
+  const color = document.getElementById('mTColor').value;
+  if (!name) return toast('Ingresa un nombre');
+  const types = cfg.ticketTypes.slice();
+  if (id) { const i = types.findIndex(t=>t.id===id); types[i] = Object.assign({}, types[i], {name,price,capacity,color}); }
+  else types.push({ id:'tt_'+uid(), name, price, capacity, color });
+  await saveConfig({ ticketTypes: types });
+  closeModal(); toast('Guardado'); render();
+}
+async function removeTicketType(id) {
+  const ventas = await getVentas();
+  if (ventas.some(v => v.ticketTypeId === id)) return toast('No se puede eliminar: ya hay ventas de este tipo');
+  if (!confirm('¿Eliminar este tipo de entrada?')) return;
+  const cfg = await getConfig();
+  await saveConfig({ ticketTypes: cfg.ticketTypes.filter(t => t.id !== id) });
+  render();
+}
+
+function adminSettings(cfg) {
+  return `
+    <div class="card">
+      <h3>Datos del evento</h3>
+      <label>Nombre</label><input id="cfgName" value="${esc(cfg.eventInfo.name)}">
+      <label>Fecha (texto)</label><input id="cfgDate" value="${esc(cfg.eventInfo.date)}">
+      <label>Fecha (AAAA-MM-DD, para el contador de días)</label><input id="cfgRawDate" type="date" value="${esc(cfg.eventInfo.rawDate||'')}">
+      <label>Lugar</label><input id="cfgVenue" value="${esc(cfg.eventInfo.venue)}">
+      <label>Reglas (aparece en la entrada)</label><input id="cfgRules" value="${esc(cfg.eventInfo.rules)}">
+      <button onclick="saveEventInfo()">Guardar</button>
+    </div>
+        <div class="card">
+      <h3>Cuentas y seguridad</h3>
+      <div class="info-note">
+        Ya no se usan PINs. Cada persona entra con su propio usuario y contraseña,
+        y la base de datos está protegida por reglas que verifican el rol en el servidor.
+      </div>
+      <div class="divider"></div>
+      <label>Crear cuenta para la puerta (rol scanner)</label>
+      <input id="cfgPuertaUser" autocapitalize="off" spellcheck="false" placeholder="Ej: puerta1">
+      <input id="cfgPuertaPass" placeholder="Contraseña (mínimo 6 caracteres)" style="margin-top:8px;">
+      <button class="secondary" onclick="createDoorAccount()">Crear cuenta de puerta</button>
+      <div class="info-note" style="margin-top:8px;">
+        Creá una cuenta por cada teléfono que vaya a escanear. Anotá las contraseñas:
+        no se pueden volver a ver, solo resetear desde Firebase → Authentication.
+      </div>
+      <div class="divider"></div>
+      <div class="info-note">Sesión actual: <b>${esc(auth.currentUser ? auth.currentUser.email : '—')}</b></div>
+    </div>
+    <div class="card">
+      <h3>Envío de entradas por correo (EmailJS)</h3>
+      <div class="info-note">
+        Crea una cuenta gratis en <b>emailjs.com</b>, conecta tu Gmail/Outlook como "Email Service",
+        y sube a plan <b>Personal ($9/mes)</b> — los adjuntos dinámicos no funcionan en el plan gratis.
+        Crea una plantilla con estos parámetros exactos: <code>to_email</code>, <code>to_name</code>,
+        <code>event_name</code>, <code>event_date</code>, <code>event_venue</code>, <code>ticket_type</code>,
+        <code>ticket_price</code>, <code>ticket_id</code>. En la pestaña de adjuntos de la plantilla,
+        agrega un "Variable Attachment" con Parameter Name <code>pdf_base64</code>, Content Type
+        <code>application/pdf</code> y Filename usando <code>{{pdf_filename}}</code>.
+      </div>
+      <label>Service ID</label>
+      <input id="cfgEjsService" value="${esc(cfg.emailjs?.serviceId||'')}" placeholder="service_xxxxxxx">
+      <label>Template ID</label>
+      <input id="cfgEjsTemplate" value="${esc(cfg.emailjs?.templateId||'')}" placeholder="template_xxxxxxx">
+      <label>Public Key</label>
+      <input id="cfgEjsKey" value="${esc(cfg.emailjs?.publicKey||'')}" placeholder="tu public key">
+      <button onclick="saveEmailJsConfig()">Guardar configuración de correo</button>
+    </div>
+    <div class="card">
+      <h3>Seguridad de las entradas</h3>
+      <div class="info-note">Las entradas vendidas antes de esta actualizacion llevan el codigo corto
+        dentro del QR. Este boton les genera un token largo. Solo afecta a las que aun no lo tienen,
+        y podes ejecutarlo las veces que quieras.</div>
+      <button class="secondary" onclick="backfillTokens()">Generar tokens faltantes</button>
+      <div class="info-note" style="margin-top:8px;">Importante: las entradas que ya enviaste por
+        WhatsApp siguen sirviendo. El scanner acepta el codigo corto y el token largo.</div>
+    </div>
+    <div class="card">
+      <h3>Zona de peligro</h3>
+      <div class="warn">Borra TODAS las ventas y embajadores del backend. No se puede deshacer.</div>
+      <label>Código para borrar todos los datos ${cfg.wipeCode ? '(ya configurado)' : '(sin configurar — el botón no funciona hasta que definas uno)'}</label>
+      <input id="cfgWipeCode" placeholder="Elige un código que solo tú sepas">
+      <button class="secondary" onclick="saveWipeCode()">Guardar código de borrado</button>
+      <div class="divider"></div>
+      <button class="danger" onclick="confirmWipeAll()">Borrar todos los datos</button>
+    </div>
+  `;
+}
+async function saveEventInfo() {
+  await saveConfig({ eventInfo: {
+    name: document.getElementById('cfgName').value.trim(),
+    date: document.getElementById('cfgDate').value.trim(),
+    rawDate: document.getElementById('cfgRawDate').value.trim(),
+    venue: document.getElementById('cfgVenue').value.trim(),
+    rules: document.getElementById('cfgRules').value.trim()
+  }});
+  toast('Guardado'); render();
+}
+async function saveEmailJsConfig() {
+  const serviceId = document.getElementById('cfgEjsService').value.trim();
+  const templateId = document.getElementById('cfgEjsTemplate').value.trim();
+  const publicKey = document.getElementById('cfgEjsKey').value.trim();
+  await saveConfig({ emailjs: { serviceId, templateId, publicKey } });
+  toast('Configuración de correo guardada'); render();
+}
+async function saveWipeCode() {
+  const code = document.getElementById('cfgWipeCode').value.trim();
+  if (!code) return toast('Ingresa un código');
+  await saveConfig({ wipeCode: code });
+  toast('Código de borrado guardado'); render();
+}
+/* El botón de borrado no depende de confirm()/prompt() genéricos del navegador
+   (fáciles de aceptar sin pensar) — exige el código secreto que tú definiste
+   arriba. Si no coincide exactamente, no borra nada. Si no has definido
+   ningún código todavía, el botón queda inutilizado por diseño. */
+async function confirmWipeAll() {
+  const cfg = await getConfig();
+  if (!cfg.wipeCode) {
+    toast('Primero define tu código de borrado arriba en esta misma sección');
+    return;
+  }
+  const typed = prompt('Escribe tu código para confirmar el borrado de TODAS las ventas y embajadores:');
+  if (typed === null) return;
+  if (typed !== cfg.wipeCode) {
+    toast('Código incorrecto — no se borró nada');
+    return;
+  }
+  await wipeAll();
+}
+async function wipeAll() {
+  const [ventas, ambs] = await Promise.all([getVentas(), getAmbassadors()]);
+  const batchSize = 400;
+  async function wipeCollection(name, ids) {
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const batch = writeBatch(db);
+      ids.slice(i, i+batchSize).forEach(id => batch.delete(doc(db, name, id)));
+      await batch.commit();
+    }
+  }
+  await wipeCollection('ventas', ventas.map(v => v.idBoleto));
+  await wipeCollection('ambassadors', ambs.map(a => a.id));
+  toast('Todo borrado'); render();
+}
+
+/* ================== DISEÑO (plantilla + estampado) ================== */
+function adminDesign(cfg) {
+  const hasTemplate = !!(cfg.template && cfg.template.url);
+  return `
+    <div class="card">
+      <h3>Plantilla de la entrada</h3>
+      <div class="info-note">Sube el diseño de tu entrada (.png o .jpg). Se usará como fondo del ticket para todas las ventas. Si no subes nada, se usa un marco por defecto.</div>
+      <div class="upload-zone" id="uploadZone" onclick="document.getElementById('templateFile').click()">
+        ${hasTemplate
+          ? `<img src="${cfg.template.url}" style="max-width:100%; max-height:220px; border-radius:3px;">`
+          : `<div style="color:var(--muted); text-transform:uppercase; letter-spacing:.08em; font-size:12px;">Toca para subir tu diseño (PNG/JPG)</div>`}
+      </div>
+      <input type="file" id="templateFile" accept="image/png,image/jpeg" style="display:none" onchange="onTemplateFileChosen(event)">
+      <div class="row" style="margin-top:10px;">
+        <button class="secondary" onclick="document.getElementById('templateFile').click()">${hasTemplate?'Cambiar diseño':'Subir diseño'}</button>
+        ${hasTemplate ? `<button class="danger" onclick="removeTemplate()">Quitar diseño</button>` : ''}
+      </div>
+      <div id="uploadProgress"></div>
+    </div>
+
+    <div class="card">
+      <h3>Posición del estampado</h3>
+      <div class="info-note">Ajusta dónde caen el código QR y el texto sobre tu diseño. La vista previa se actualiza al instante.</div>
+
+      <label>QR — posición horizontal (${cfg.stamp.qrXPct}%)</label>
+      <input type="range" min="0" max="90" id="qrX" value="${cfg.stamp.qrXPct}" oninput="onStampChange()">
+      <label>QR — posición vertical (${cfg.stamp.qrYPct}%)</label>
+      <input type="range" min="0" max="90" id="qrY" value="${cfg.stamp.qrYPct}" oninput="onStampChange()">
+      <label>QR — tamaño (${cfg.stamp.qrSizePct}% del ancho)</label>
+      <input type="range" min="10" max="45" id="qrSize" value="${cfg.stamp.qrSizePct}" oninput="onStampChange()">
+
+      <div class="divider"></div>
+
+      <label>Texto — posición horizontal (${cfg.stamp.textXPct}%)</label>
+      <input type="range" min="0" max="90" id="textX" value="${cfg.stamp.textXPct}" oninput="onStampChange()">
+      <label>Texto — posición vertical (${cfg.stamp.textYPct}%)</label>
+      <input type="range" min="0" max="96" id="textY" value="${cfg.stamp.textYPct}" oninput="onStampChange()">
+      <label>Tamaño de texto (${cfg.stamp.fontSizePct}% del ancho)</label>
+      <input type="range" min="1.5" max="6" step="0.1" id="fontSize" value="${cfg.stamp.fontSizePct}" oninput="onStampChange()">
+      <label>Color de texto</label>
+      <input type="color" id="fontColor" value="${cfg.stamp.fontColor}" oninput="onStampChange()">
+
+      <div class="ticket-canvas-wrap" style="margin-top:14px;">
+        <canvas id="previewCanvas"></canvas>
+      </div>
+
+      <button style="margin-top:12px;" onclick="saveStampConfig()">Guardar posición</button>
+    </div>
+  `;
+}
+function setupDesignTab(cfg) { renderTicketPreview(cfg); }
+
+async function onTemplateFileChosen(evt) {
+  const file = evt.target.files[0];
+  if (!file) return;
+  if (!/^image\/(png|jpeg)$/.test(file.type)) return toast('Solo PNG o JPG');
+  document.getElementById('uploadProgress').innerHTML = `<div class="info-note">Subiendo diseño…</div>`;
+  try {
+    const ext = file.type === 'image/png' ? 'png' : 'jpg';
+    const path = `templates/current.${ext}`;
+    const ref = fileRef(path);
+    await uploadBytes(ref, file, { contentType: file.type });
+    const url = await getDownloadURL(ref);
+    await saveConfig({ template: { url, path } });
+    document.getElementById('uploadProgress').innerHTML = `<div class="info-note">Diseño subido correctamente</div>`;
+    toast('Diseño guardado');
+    render();
+  } catch (e) {
+    document.getElementById('uploadProgress').innerHTML = `<div class="warn">Error subiendo: ${esc(e.message||e)}</div>`;
+  }
+}
+async function removeTemplate() {
+  if (!confirm('¿Quitar el diseño personalizado y volver al marco por defecto?')) return;
+  const cfg = await getConfig();
+  if (cfg.template && cfg.template.path) {
+    try { await deleteObject(fileRef(cfg.template.path)); } catch(e) {}
+  }
+  await saveConfig({ template: { url: null, path: null } });
+  toast('Diseño eliminado'); render();
+}
+
+function currentStampFromInputs() {
+  return {
+    qrXPct: Number(document.getElementById('qrX').value),
+    qrYPct: Number(document.getElementById('qrY').value),
+    qrSizePct: Number(document.getElementById('qrSize').value),
+    textXPct: Number(document.getElementById('textX').value),
+    textYPct: Number(document.getElementById('textY').value),
+    fontSizePct: Number(document.getElementById('fontSize').value),
+    fontColor: document.getElementById('fontColor').value
+  };
+}
+let _stampDebounce = null;
+function onStampChange() {
+  clearTimeout(_stampDebounce);
+  _stampDebounce = setTimeout(async () => {
+    const cfg = await getConfig();
+    cfg.stamp = Object.assign({}, cfg.stamp, currentStampFromInputs());
+    renderTicketPreview(cfg);
+  }, 80);
+}
+async function saveStampConfig() {
+  const stamp = currentStampFromInputs();
+  await saveConfig({ stamp });
+  toast('Posición guardada'); render();
+}
+async function renderTicketPreview(cfg) {
+  const canvas = document.getElementById('previewCanvas');
+  if (!canvas) return;
+  await drawTicket(canvas, { idBoleto: 'KR-DEMO1', nombreComprador: 'Nombre de Ejemplo' }, cfg);
+}
+
+/* ---------- CANVAS TICKET ENGINE ---------- */
+async function loadImageSafely(url) {
+  try {
+    const resp = await fetch(url, { mode: 'cors' });
+    if (!resp.ok) throw new Error('bad status');
+    const blob = await resp.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const img = await new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res(im);
+      im.onerror = rej;
+      im.src = objUrl;
+    });
+    return img;
+  } catch (e) {
+    return new Promise((res, rej) => {
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = () => res(im);
+      im.onerror = rej;
+      im.src = url;
+    });
+  }
+}
+
+function drawPlaceholderBackground(ctx, w, h, eventName) {
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, '#0a0a0a');
+  grad.addColorStop(1, '#1a0906');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#e6402b';
+  ctx.lineWidth = Math.max(4, w * 0.006);
+  ctx.setLineDash([w*0.02, w*0.015]);
+  ctx.strokeRect(w*0.04, h*0.04, w*0.92, h*0.92);
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#e6402b';
+  ctx.textAlign = 'center';
+  ctx.font = `700 ${Math.round(w*0.075)}px Arial, sans-serif`;
+  ctx.fillText((eventName || 'KEG RACE 2026').toUpperCase(), w/2, h*0.46);
+  ctx.font = `400 ${Math.round(w*0.028)}px sans-serif`;
+  ctx.fillStyle = '#8f8f8f';
+  ctx.fillText('SUBE TU DISEÑO EN ADMIN → DISEÑO', w/2, h*0.53);
+}
+
+function generateQrCanvas(text, sizePx) {
+  return new Promise((resolve) => {
+    const holder = document.createElement('div');
+    holder.style.position = 'fixed';
+    holder.style.left = '-9999px';
+    document.body.appendChild(holder);
+    new QRCode(holder, { text, width: sizePx, height: sizePx, correctLevel: QRCode.CorrectLevel.H });
+    setTimeout(() => {
+      const c = holder.querySelector('canvas');
+      const img = holder.querySelector('img');
+      let out = c;
+      if (!out && img) {
+        out = document.createElement('canvas');
+        out.width = sizePx; out.height = sizePx;
+        out.getContext('2d').drawImage(img, 0, 0, sizePx, sizePx);
+      }
+      document.body.removeChild(holder);
+      resolve(out);
+    }, 60);
+  });
+}
+
+async function drawTicket(canvas, sale, cfg) {
+  const MAX_DIM = 1400;
+  let w = 1000, h = 1500;
+  let bgImg = null;
+
+  if (cfg.template && cfg.template.url) {
+    try {
+      bgImg = await loadImageSafely(cfg.template.url);
+      w = bgImg.naturalWidth; h = bgImg.naturalHeight;
+      if (Math.max(w, h) > MAX_DIM) {
+        const scale = MAX_DIM / Math.max(w, h);
+        w = Math.round(w * scale); h = Math.round(h * scale);
+      }
+    } catch (e) { bgImg = null; }
+  }
+
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (bgImg) ctx.drawImage(bgImg, 0, 0, w, h);
+  else drawPlaceholderBackground(ctx, w, h, (cfg.eventInfo && cfg.eventInfo.name) || 'KEG RACE 2026');
+
+  const stamp = cfg.stamp || DEFAULT_CONFIG.stamp;
+  const qrSizePx = Math.round(w * (stamp.qrSizePct / 100));
+  const qrX = Math.round(w * (stamp.qrXPct / 100));
+  const qrY = Math.round(h * (stamp.qrYPct / 100));
+  const qrCanvas = await generateQrCanvas(sale.token || sale.idBoleto, Math.max(220, qrSizePx * 2));
+  if (qrCanvas) {
+    const pad = Math.round(qrSizePx * 0.08);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(qrX - pad, qrY - pad, qrSizePx + pad*2, qrSizePx + pad*2);
+    ctx.drawImage(qrCanvas, qrX, qrY, qrSizePx, qrSizePx);
+  }
+
+  const fontPx = Math.max(14, Math.round(w * (stamp.fontSizePct / 100)));
+  const textX = Math.round(w * (stamp.textXPct / 100));
+  const textY = Math.round(h * (stamp.textYPct / 100));
+  const line1 = sale.idBoleto;
+  const line2 = sale.nombreComprador || '';
+
+  ctx.font = `700 ${fontPx}px Arial, sans-serif`;
+  const w1 = ctx.measureText(line1).width;
+  ctx.font = `400 ${Math.round(fontPx*0.85)}px Arial, sans-serif`;
+  const w2 = ctx.measureText(line2).width;
+  const boxW = Math.max(w1, w2) + fontPx;
+  const boxH = fontPx * 2.6;
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillRect(textX - fontPx*0.5, textY - fontPx*0.5, boxW, boxH);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = stamp.fontColor || '#111111';
+  ctx.font = `700 ${fontPx}px Arial, sans-serif`;
+  ctx.fillText(line1, textX, textY + fontPx*0.9);
+  ctx.font = `400 ${Math.round(fontPx*0.85)}px Arial, sans-serif`;
+  ctx.fillText(line2, textX, textY + fontPx*2.0);
+
+  return canvas;
+}
+
+/* ================== AMBASSADOR ================== */
+async function renderAmbassador(app) {
+  const cfg = await getConfig();
+  const ambs = await getAmbassadors();
+  const me = ambs.find(a => a.id === state.userId);
+
+  app.innerHTML = `
+    ${brandBar(cfg, 'EMBAJADOR')}
+    <div class="wrap content-pad">
+      <div class="eyebrow">Portal del embajador</div>
+      <h1 class="pagetitle">${state.ambassadorTab==='sell' ? 'Nueva venta' : 'Mis ventas'}</h1>
+      <div class="segtabs">
+        <button class="segtab ${state.ambassadorTab==='sell'?'active':''}" onclick="setAmbassadorTab('sell')">Nueva venta</button>
+        <button class="segtab ${state.ambassadorTab==='mysales'?'active':''}" onclick="setAmbassadorTab('mysales')">Mis ventas</button>
+      </div>
+      <div id="ambContent"><div class="empty">Cargando…</div></div>
+    </div>
+  `;
+  const content = document.getElementById('ambContent');
+
+  if (state.ambassadorTab === 'sell') {
+    content.innerHTML = ambassadorSellForm(cfg);
+    setupSellForm(cfg);
+  } else {
+    const unsub = listenVentasByAmbassador(state.userId, ventas => {
+      ventas.sort((a,b) => (b.fechaVenta?.toMillis?.()||0) - (a.fechaVenta?.toMillis?.()||0));
+      const totalCommission = ventas.length * Number(me?.commissionPerTicket || 0);
+      content.innerHTML = `
+        <div class="card">
+          <div class="grid-2">
+            <div class="stat"><div class="stat-value">${ventas.length}</div><div class="stat-label">Entradas</div></div>
+            <div class="stat"><div class="stat-value">${fmtMoney(totalCommission)}</div><div class="stat-label">Comisión</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Mis ventas</h3>
+          ${ventas.length===0 ? '<div class="empty">Aún no has vendido entradas.</div>' :
+            ventas.map(v => `<div class="list-item">
+              <div class="list-item-main">
+                <div class="list-item-title">${esc(v.nombreComprador)}</div>
+                <div class="list-item-sub">${esc(v.tipoEntrada||'')} · ${fmtMoney(v.precio)} · ${fmtDate(v.fechaVenta)}</div>
+              </div>
+              <button class="icon-btn secondary" onclick="viewTicket('${v.idBoleto}')">Ver</button>
+            </div>`).join('')
+          }
+        </div>
+      `;
+    });
+    state.unsubs.push(unsub);
+  }
+}
+function setAmbassadorTab(t) { state.ambassadorTab = t; render(); }
+
+function ambassadorSellForm(cfg) {
+  return `
+    <div class="card">
+      <label>Nombre del comprador *</label>
+      <input id="fBuyer" placeholder="Nombre completo">
+      <label>DUI del comprador (opcional)</label>
+      <input id="fDui" placeholder="Ej: 04512345-6">
+      <label>Teléfono (opcional, para WhatsApp)</label>
+      <input id="fPhone" placeholder="Ej: 7777-7777" inputmode="tel">
+      <label>Tipo de entrada *</label>
+      <select id="fType">
+        <option value="" selected disabled>Selecciona un tipo…</option>
+        ${cfg.ticketTypes.map(t => `<option value="${t.id}" data-price="${t.price}" data-name="${esc(t.name)}">${esc(t.name)} - ${fmtMoney(t.price)}</option>`).join('')}
+      </select>
+      <label>Método de pago *</label>
+      <select id="fPayment">
+        <option value="" selected disabled>Selecciona un método…</option>
+        <option value="efectivo">Efectivo</option>
+        <option value="transferencia">Transferencia</option>
+        <option value="mixto">Mixto</option>
+      </select>
+      <div style="background:var(--panel-2); border:1px solid var(--line); padding:12px; border-radius:3px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; font-size:12px;">
+          <span style="color:var(--muted); text-transform:uppercase; letter-spacing:.08em;">Total a pagar</span>
+          <span id="fTotal" style="font-weight:700; color:var(--accent)">—</span>
+        </div>
+      </div>
+      <button id="submitBtn" onclick="submitSale()">Registrar venta y generar entrada</button>
+    </div>
+  `;
+}
+function setupSellForm(cfg) {
+  const sel = document.getElementById('fType');
+  const updateTotal = () => {
+    const opt = sel.options[sel.selectedIndex];
+    const hasPrice = opt && opt.dataset.price !== undefined;
+    document.getElementById('fTotal').textContent = hasPrice ? fmtMoney(Number(opt.dataset.price)) : '—';
+  };
+  sel.addEventListener('change', updateTotal);
+  updateTotal();
+}
+
+/* Deja el formulario completamente en blanco, sin nada precargado — ni texto
+   ni selects con una opción ya elegida. Se llama justo después de guardar la
+   venta en Firestore, no al cerrar el modal del ticket, para que el riesgo de
+   duplicar una venta por accidente desaparezca desde el momento en que ya
+   quedó guardada, no mientras el embajador todavía está viendo/descargando/
+   enviando la entrada. */
+function resetSellForm() {
+  ['fBuyer','fDui','fPhone'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const sel = document.getElementById('fType');
+  if (sel) sel.selectedIndex = 0; // vuelve al placeholder "Selecciona un tipo…"
+  const pay = document.getElementById('fPayment');
+  if (pay) pay.selectedIndex = 0; // vuelve al placeholder "Selecciona un método…"
+  const totalEl = document.getElementById('fTotal');
+  if (totalEl) totalEl.textContent = '—';
+}
+
+async function createDoorAccount() {
+  const user = document.getElementById('cfgPuertaUser').value.trim();
+  const pass = document.getElementById('cfgPuertaPass').value;
+  if (!user) return toast('Escribí el usuario');
+  if (!pass || pass.length < 6) return toast('La contraseña necesita 6 caracteres o más');
+  let sec = null;
+  try {
+    sec = initializeApp(firebaseConfig, 'secondary_' + Date.now());
+    const secAuth = getAuth(sec);
+    const cred = await createUserWithEmailAndPassword(secAuth, toEmail(user), pass);
+    await signOut(secAuth);
+    await setDoc(doc(db, 'roles', cred.user.uid), {
+      role: 'puerta', name: user, email: toEmail(user)
+    });
+    toast('Cuenta de puerta creada: ' + toEmail(user));
+    document.getElementById('cfgPuertaUser').value = '';
+    document.getElementById('cfgPuertaPass').value = '';
+  } catch (e) {
+    const map = {
+      'auth/email-already-in-use': 'Ese usuario ya existe.',
+      'auth/operation-not-allowed': 'Activá Correo/Contraseña en Firebase → Authentication.'
+    };
+    toast(map[e.code] || ('Error: ' + (e.message || e)));
+  } finally {
+    if (sec) { try { await deleteApp(sec); } catch(x){} }
+  }
+}
+
+async function backfillTokens() {
+  try {
+    const snap = await getDocs(collection(db, 'ventas'));
+    const pend = snap.docs.filter(d => !d.data().token);
+    if (!pend.length) return toast('Todas las entradas ya tienen token');
+    let batch = writeBatch(db), n = 0, done = 0;
+    for (const d of pend) {
+      batch.set(doc(db, 'ventas', d.id), { token: generateTicketToken() }, { merge: true });
+      n++; done++;
+      if (n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+    }
+    if (n) await batch.commit();
+    toast(done + ' entradas actualizadas');
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
+async function submitSale() {
+  const btn = document.getElementById('submitBtn');
+  const cfg = await getConfig();
+  const buyerName = document.getElementById('fBuyer').value.trim();
+  const dui = document.getElementById('fDui').value.trim();
+  const phone = document.getElementById('fPhone').value.trim();
+  const sel = document.getElementById('fType');
+  const typeId = sel.value;
+  const payment = document.getElementById('fPayment').value;
+  if (!buyerName) return toast('Ingresa nombre del comprador');
+  if (!typeId) return toast('Selecciona el tipo de entrada');
+  const tt = cfg.ticketTypes.find(t => t.id === typeId);
+  if (!tt) return toast('Tipo inválido');
+  if (!payment) return toast('Selecciona el método de pago');
+
+  btn.disabled = true; btn.textContent = 'Registrando…';
+  try {
+    const sold = await countVentasByType(typeId);
+    if (sold >= tt.capacity) { toast(`${tt.name} agotado`); return; }
+
+    const idBoleto = await generateUniqueTicketId();
+    const ambs = await getAmbassadors();
+    const me = ambs.find(a => a.id === state.userId);
+
+    const sale = {
+      idBoleto,
+      token: generateTicketToken(),
+      nombreComprador: buyerName,
+      dui,
+      telefono: phone,
+      correo: '',
+      embajador: me ? me.name : state.userName,
+      metodoPago: payment,
+      tipoEntrada: tt.name,
+      precio: tt.price,
+      fechaVenta: serverTimestamp(),
+      ingresado: false,
+      ambassadorId: state.userId,
+      ticketTypeId: tt.id
+    };
+    await createVenta(sale);
+    toast('Venta registrada');
+    resetSellForm();
+    viewTicket(idBoleto);
+  } catch (e) {
+    toast('Error: ' + (e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Registrar venta y generar entrada';
+  }
+}
+
+/* ================== TICKET VIEW (canvas + descarga + whatsapp) ================== */
+/* Caché de assets (PNG/PDF) por boleto, generados EN CUANTO se abre el modal,
+   no cuando el usuario toca "WhatsApp". Esto es clave: navigator.share() exige
+   ejecutarse casi sincrónicamente dentro del gesto del usuario (el tap), y generar
+   el PDF ahí mismo (fetch de la plantilla + QR async) casi siempre llega tarde y
+   el navegador lo rechaza en silencio — sobre todo en iPhone. Precalculando el
+   PDF/PNG apenas se abre el ticket, el botón solo dispara el share con el
+   archivo ya listo, sin nada async de por medio. */
+const ticketAssetCache = new Map();
+
+async function prepareTicketAssets(idBoleto, canvas, sale, cfg) {
+  const pngBlob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ orientation: canvas.width >= canvas.height ? 'l' : 'p', unit: 'px', format: [canvas.width, canvas.height] });
+  pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width, canvas.height);
+  const pdfBlob = pdf.output('blob');
+  const assets = {
+    sale, cfg,
+    pngBlob, pdfBlob,
+    pngFile: new File([pngBlob], `entrada-${idBoleto}.png`, { type: 'image/png' }),
+    pdfFile: new File([pdfBlob], `entrada-${idBoleto}.pdf`, { type: 'application/pdf' })
+  };
+  ticketAssetCache.set(idBoleto, assets);
+  return assets;
+}
+
+async function viewTicket(idBoleto) {
+  const snap = await getDoc(doc(db, 'ventas', idBoleto));
+  if (!snap.exists()) return toast('No encontrado');
+  const sale = snap.data();
+  const cfg = await getConfig();
+
+  openModal(`
+    <h2 style="text-align:center;">${esc(cfg.eventInfo.name)}</h2>
+    <div class="ticket-canvas-wrap"><canvas id="ticketCanvas"></canvas></div>
+    <div style="text-align:center; font-family:monospace; font-size:12px; color:var(--muted); margin-top:8px;">${esc(sale.idBoleto)}</div>
+    <div class="row" style="margin-top:14px;">
+      <button class="success" id="btnWa" disabled onclick="shareWhatsApp('${idBoleto}')">Preparando…</button>
+      <button class="secondary" id="btnImg" disabled onclick="downloadTicketPNG('${idBoleto}')">Imagen</button>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <button class="secondary" id="btnPdf" disabled onclick="downloadTicketPDF('${idBoleto}')">Preparando…</button>
+      <button class="secondary" id="btnEmail" disabled onclick="sendTicketEmail('${idBoleto}')">Correo</button>
+    </div>
+    <button class="ghost" style="margin-top:8px;" onclick="closeModal()">Cerrar</button>
+  `);
+
+  const canvas = document.getElementById('ticketCanvas');
+  await drawTicket(canvas, sale, cfg);
+  await prepareTicketAssets(idBoleto, canvas, sale, cfg);
+
+  const btnWa = document.getElementById('btnWa');
+  const btnImg = document.getElementById('btnImg');
+  const btnPdf = document.getElementById('btnPdf');
+  const btnEmail = document.getElementById('btnEmail');
+  if (btnWa)  { btnWa.disabled = false;  btnWa.textContent = 'WhatsApp'; }
+  if (btnImg) { btnImg.disabled = false; }
+  if (btnPdf) { btnPdf.disabled = false; btnPdf.textContent = 'Descargar PDF'; }
+  if (btnEmail) { btnEmail.disabled = false; btnEmail.textContent = sale.correo ? 'Correo' : 'Correo (sin dirección)'; }
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function _assetsFor(idBoleto) {
+  if (ticketAssetCache.has(idBoleto)) return ticketAssetCache.get(idBoleto);
+  // Fallback: llamado fuera del modal (sin precálculo). Se genera al vuelo.
+  const snap = await getDoc(doc(db, 'ventas', idBoleto));
+  const sale = snap.data();
+  const cfg = await getConfig();
+  const canvas = document.createElement('canvas');
+  await drawTicket(canvas, sale, cfg);
+  return prepareTicketAssets(idBoleto, canvas, sale, cfg);
+}
+
+async function downloadTicketPNG(idBoleto) {
+  const { pngBlob } = await _assetsFor(idBoleto);
+  downloadBlob(pngBlob, `entrada-${idBoleto}.png`);
+  toast('Imagen descargada');
+}
+async function downloadTicketPDF(idBoleto) {
+  const { pdfBlob } = await _assetsFor(idBoleto);
+  downloadBlob(pdfBlob, `entrada-${idBoleto}.pdf`);
+  toast('PDF descargado');
+}
+
+function waMessageFor(sale, cfg) {
+  return encodeURIComponent(
+`${cfg.eventInfo.name}
+
+Hola ${sale.nombreComprador}! Aquí tu entrada:
+
+Fecha: ${cfg.eventInfo.date}
+Lugar: ${cfg.eventInfo.venue}
+Entrada: ${sale.tipoEntrada || ''} · ${fmtMoney(sale.precio)}
+
+Presenta el código QR en la entrada. Es único y solo funciona una vez.
+ID: ${sale.idBoleto}
+
+¡Nos vemos en la fiesta!`
+  );
+}
+
+/* Deliberadamente NO async: navigator.share() debe llamarse en el mismo tick
+   del click. Si el archivo no está en caché todavía (raro, botón deshabilitado
+   hasta entonces), avisamos y no seguimos — mejor eso que perder el gesto. */
+function shareWhatsApp(idBoleto) {
+  const assets = ticketAssetCache.get(idBoleto);
+  if (!assets) { toast('Espera un segundo, se sigue preparando la entrada…'); return; }
+  const { sale, cfg, pdfFile } = assets;
+  const text = decodeURIComponent(waMessageFor(sale, cfg));
+
+  if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+    navigator.share({ files: [pdfFile], title: cfg.eventInfo.name, text })
+      .catch(() => whatsAppFallback(assets)); // usuario canceló, o el navegador lo rechazó
+    return;
+  }
+  whatsAppFallback(assets);
+}
+
+function whatsAppFallback(assets) {
+  const { sale, cfg, pdfBlob } = assets;
+  downloadBlob(pdfBlob, `entrada-${sale.idBoleto}.pdf`);
+  const phoneClean = (sale.telefono || '').replace(/\D/g,'');
+  if (!phoneClean) {
+    toast('No hay teléfono registrado para este comprador. Se descargó el PDF — compártelo manualmente.');
+    return;
+  }
+  const waHref = `https://wa.me/${phoneClean.length > 8 ? phoneClean : '503'+phoneClean}?text=${waMessageFor(sale, cfg)}`;
+  window.open(waHref, '_blank');
+  toast('Este navegador no permite adjuntar directo. Se descargó el PDF — adjúntalo manualmente en el chat.');
+}
+
+/* ================== ENVÍO POR CORREO (EmailJS, sin backend) ================== */
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function sendTicketEmail(idBoleto) {
+  const assets = ticketAssetCache.get(idBoleto);
+  if (!assets) { toast('Espera a que termine de prepararse la entrada…'); return; }
+  let { sale, cfg, pdfBlob } = assets;
+
+  if (!sale.correo) {
+    const email = prompt('No hay correo registrado para este comprador. Ingrésalo:');
+    if (!email || !email.trim()) return;
+    sale.correo = email.trim();
+    try {
+      await updateDoc(doc(db, 'ventas', idBoleto), { correo: sale.correo });
+      assets.sale = sale; // mantener caché al día
+    } catch (e) { /* si falla el guardado igual intentamos enviar */ }
+  }
+
+  const ejs = cfg.emailjs;
+  if (!ejs || !ejs.serviceId || !ejs.templateId || !ejs.publicKey) {
+    toast('Falta configurar EmailJS en Admin → Ajustes'); return;
+  }
+  if (typeof window.emailjs === 'undefined') {
+    toast('No se pudo cargar el servicio de correo (revisa tu conexión)'); return;
+  }
+
+  const btn = document.getElementById('btnEmail');
+  if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
+  try {
+    const pdf_base64 = await blobToBase64(pdfBlob);
+    await window.emailjs.send(ejs.serviceId, ejs.templateId, {
+      to_email: sale.correo,
+      to_name: sale.nombreComprador,
+      event_name: cfg.eventInfo.name,
+      event_date: cfg.eventInfo.date,
+      event_venue: cfg.eventInfo.venue,
+      ticket_type: sale.tipoEntrada || '',
+      ticket_price: fmtMoney(sale.precio),
+      ticket_id: sale.idBoleto,
+      pdf_base64,
+      pdf_filename: `entrada-${sale.idBoleto}.pdf`
+    }, { publicKey: ejs.publicKey });
+    toast('✅ Correo enviado a ' + sale.correo);
+  } catch (e) {
+    toast('Error enviando correo: ' + (e?.text || e?.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Correo'; }
+  }
+}
+
+
+/* ================== SCANNER ================== */
+async function renderScanner(app) {
+  const cfg = await getConfig();
+  app.innerHTML = `
+    ${brandBar(cfg, 'SCANNER')}
+    <div class="wrap content-pad">
+      <div class="eyebrow">Puerta · Validación de entradas</div>
+      <h1 class="pagetitle">Scanner</h1>
+      <div id="scannerStats" class="card"><div class="empty">Cargando…</div></div>
+      <div class="card">
+        <h3>Escanear entrada</h3>
+        <div class="reader-wrap">
+          <div id="reader"></div>
+          <div class="reader-grid-overlay">
+            <div class="reader-frame">
+              <span class="corner tl"></span><span class="corner tr"></span>
+              <span class="corner bl"></span><span class="corner br"></span>
+              <span class="grid-line h" style="top:33.33%"></span>
+              <span class="grid-line h" style="top:66.66%"></span>
+              <span class="grid-line v" style="left:33.33%"></span>
+              <span class="grid-line v" style="left:66.66%"></span>
+            </div>
+          </div>
+        </div>
+        <div class="info-note" style="margin-top:10px;">Centra el código QR dentro del recuadro para escanear.</div>
+        <div id="scanResult"></div>
+        <div class="divider"></div>
+        <div class="row">
+          <button class="secondary" onclick="manualEntry()">Ingresar código manualmente</button>
+          <button class="ghost" onclick="restartScanner()">Reiniciar cámara</button>
+        </div>
+      </div>
+      <div class="info-note">Se valida automáticamente contra Firestore (transacción atómica anti doble-ingreso).</div>
+    </div>
+  `;
+
+  const unsub = listenVentas(ventas => {
+    const total = ventas.length, used = ventas.filter(v => v.ingresado).length;
+    const el = document.getElementById('scannerStats');
+    if (el) el.innerHTML = `
+      <h3>Estado del evento</h3>
+      <div class="grid-2">
+        <div class="stat"><div class="stat-value">${used}</div><div class="stat-label">Ingresados</div></div>
+        <div class="stat"><div class="stat-value">${total-used}</div><div class="stat-label">Faltan</div></div>
+      </div>`;
+  });
+  state.unsubs.push(unsub);
+
+  // Si el teléfono bloquea pantalla, cambia de app, o el SO le quita la cámara
+  // al navegador un instante, html5-qrcode puede dejar de recibir frames sin
+  // avisar. Al volver a estar visible la pestaña, reiniciamos la cámara sola.
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible' && state.role === 'scanner') {
+      restartScanner();
+    }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  state.unsubs.push(() => document.removeEventListener('visibilitychange', onVisibility));
+
+  setTimeout(startScanner, 100);
+}
+
+async function startScanner() {
+  try {
+    const html5QrCode = new Html5Qrcode("reader");
+    state.scannerInstance = html5QrCode;
+    await html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      onScanSuccess,
+      () => {}
+    );
+  } catch (e) {
+    const el = document.getElementById('reader');
+    if (el) el.innerHTML = `<div class="warn">No se pudo acceder a la cámara: ${esc(e.message||e)}<br><br>Usa "Ingresar código manualmente".</div>`;
+  }
+}
+
+let _restartingScanner = false;
+async function restartScanner() {
+  if (_restartingScanner || state.role !== 'scanner') return;
+  _restartingScanner = true;
+  try {
+    if (state.scannerInstance) {
+      try { await state.scannerInstance.stop(); } catch(e) {}
+      try { state.scannerInstance.clear(); } catch(e) {}
+      state.scannerInstance = null;
+    }
+    const el = document.getElementById('reader');
+    if (el) el.innerHTML = '';
+    await startScanner();
+    toast('Cámara reiniciada');
+  } finally {
+    _restartingScanner = false;
+  }
+}
+
+let lastScanId = null, lastScanTime = 0;
+async function onScanSuccess(decodedText) {
+  try {
+    const now = Date.now();
+    if (decodedText === lastScanId && (now - lastScanTime) < 3000) return;
+    lastScanId = decodedText; lastScanTime = now;
+    await validateScan(decodedText.trim());
+  } catch (e) {
+    console.error('onScanSuccess error', e);
+  }
+}
+function manualEntry() {
+  const code = prompt('Ingresa el código de la entrada:');
+  if (!code) return;
+  validateScan(code.trim().toUpperCase());
+}
+async function validateScan(idBoleto) {
+  const el = document.getElementById('scanResult');
+  if (!el) return;
+  try {
+    const result = await runTransaction(db, async (tx) => {
+      const ref = doc(db, 'ventas', idBoleto);
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return { status: 'invalid' };
+      const data = snap.data();
+      if (data.ingresado) return { status: 'used', data };
+      tx.update(ref, { ingresado: true, fechaIngreso: serverTimestamp() });
+      return { status: 'ok', data };
+    });
+
+    if (result.status === 'invalid') {
+      el.innerHTML = `<div class="scan-result invalid"><div class="scan-result-title">✕ Código inválido</div><div class="scan-result-body">No reconocido: ${esc(idBoleto)}</div></div>`;
+      beep(false); return;
+    }
+    if (result.status === 'used') {
+      el.innerHTML = `<div class="scan-result used"><div class="scan-result-title">⚠ Ya había ingresado</div><div class="scan-result-body">${esc(result.data.nombreComprador)}</div></div>`;
+      beep(false); return;
+    }
+    el.innerHTML = `<div class="scan-result valid">
+      <div class="scan-result-title">✅ Escaneado con éxito</div>
+      <div class="scan-result-body">
+        <div style="font-size:18px; font-weight:800; margin:6px 0;">Bienvenido, ${esc(result.data.nombreComprador)}</div>
+        <span class="badge red" style="font-size:12px; padding:5px 11px;">${esc(result.data.tipoEntrada||'')}</span>
+      </div>
+    </div>`;
+    toast('✅ Escaneado con éxito');
+    beep(true);
+  } catch (e) {
+    el.innerHTML = `<div class="warn">Error validando: ${esc(e.message||e)}</div>`;
+  }
+}
+// Un solo AudioContext reutilizado — crear uno nuevo en cada beep (como estaba
+// antes) puede agotar el límite de contextos simultáneos del navegador tras
+// varios escaneos seguidos y degradar el rendimiento de toda la página,
+// incluyendo el procesamiento de video de la cámara.
+let _audioCtx = null;
+function beep(ok) {
+  try {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    const o = _audioCtx.createOscillator(), g = _audioCtx.createGain();
+    o.connect(g); g.connect(_audioCtx.destination);
+    o.frequency.value = ok ? 880 : 220;
+    g.gain.setValueAtTime(0.2, _audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, _audioCtx.currentTime + 0.3);
+    o.start(); o.stop(_audioCtx.currentTime + 0.3);
+  } catch(e) {}
+}
+
+/* ================== CSV EXPORT ================== */
+async function exportCSV() {
+  const ventas = await getVentas();
+  const header = ['idBoleto','nombreComprador','dui','telefono','embajador','metodoPago','tipoEntrada','precio','fechaVenta','ingresado'];
+  const rows = ventas.map(v => [
+    v.idBoleto, v.nombreComprador, v.dui, v.telefono, v.embajador, v.metodoPago,
+    v.tipoEntrada, v.precio,
+    v.fechaVenta && v.fechaVenta.toDate ? v.fechaVenta.toDate().toISOString() : '',
+    v.ingresado ? 'SI' : 'NO'
+  ]);
+  const csv = [header, ...rows].map(r => r.map(x => `"${String(x==null?'':x).replace(/"/g,'""')}"`).join(',')).join('\n');
+  downloadBlob(new Blob([csv], {type:'text/csv;charset=utf-8;'}), `kegrace2026_ventas_${new Date().toISOString().slice(0,10)}.csv`);
+  toast('CSV descargado');
+}
+
+/* ---------- Expose functions used by inline HTML onclick/oninput/onchange handlers ----------
+   Required because this script runs as type="module": module-scoped functions are NOT
+   global by default, so inline event attributes in the generated HTML strings would fail
+   with "X is not defined" unless explicitly attached to window. */
+Object.assign(window, {
+  doLogin, logout, setAdminTab, exportCSV, viewTicket,
+  editAmbassador, removeAmbassador, saveAmbassadorModal,
+  editTicketType, removeTicketType, saveTicketTypeModal,
+  saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll,
+  onTemplateFileChosen, removeTemplate, onStampChange, saveStampConfig,
+  closeModal, setAmbassadorTab, submitSale,
+  shareWhatsApp, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
+  backfillTokens, createDoorAccount
+});
+
+/* ---------- INIT ---------- */
+onAuthStateChanged(auth, (user) => { applySession(user); });
+</script>
+</body>
+</html>
