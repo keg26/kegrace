@@ -93,6 +93,37 @@ function qrDataUrl(text) {
     if (t.anulado) return fail('Esta entrada fue anulada y ya no es válida.');
     const e = t.evento || {};
 
+    /* Si hay plantilla, la entrada ES el diseño con el QR encima, en las
+       mismas coordenadas que configuraste en DISEÑO. Se superpone con CSS
+       en porcentajes: se adapta a cualquier pantalla y no depende de CORS. */
+    if (t.plantilla) {
+      const s = Object.assign(
+        { qrXPct:66, qrYPct:60, qrSizePct:26, textXPct:66, textYPct:88, fontColor:'#111111', fontSizePct:3.4 },
+        t.stamp || {});
+      out.innerHTML = `
+        <div style="position:relative;border-radius:14px;overflow:hidden;background:#111">
+          <img src="${esc(t.plantilla)}" alt="Entrada ${esc(t.idBoleto||'')}"
+               style="width:100%;display:block" onerror="this.style.display='none'">
+          <div style="position:absolute;left:${s.qrXPct}%;top:${s.qrYPct}%;width:${s.qrSizePct}%;
+                      background:#fff;padding:0.6%;border-radius:3px;line-height:0">
+            <img id="qrimg" alt="Código QR" style="width:100%;display:block;image-rendering:pixelated">
+          </div>
+          <div style="position:absolute;left:${s.textXPct}%;top:${s.textYPct}%;
+                      background:rgba(255,255,255,.86);color:${esc(s.fontColor)};
+                      padding:0.6% 1.2%;border-radius:3px;font-size:${s.fontSizePct}vw;
+                      line-height:1.25;white-space:nowrap">
+            <b>${esc(t.idBoleto||'')}</b><br>${esc(t.nombre||'')}
+          </div>
+        </div>
+        <button class="btn" onclick="guardar()">Guardar como imagen</button>
+        <button class="btn sec" onclick="brillo()">Subir el brillo para escanear</button>
+        ${e.reglas ? `<div class="rules"><h3>Antes de venir</h3><p>${esc(e.reglas)}</p></div>` : ''}
+        <div class="tip">Mostrá este código en la puerta. Se escanea una sola vez:
+          si se lo reenviás a alguien más, el primero que llegue entra y vos te quedás afuera.</div>`;
+      document.getElementById('qrimg').src = qrDataUrl(t.token || token);
+      return;
+    }
+
     out.innerHTML = `
       <div class="tick" id="tick">
         <div class="tick-top">
@@ -132,6 +163,52 @@ window.guardar = async function () {
     const db = getFirestore(initializeApp(window.KEGRACE_FIREBASE, 'dl_' + Date.now()));
     const t = (await getDoc(doc(db, 'tickets_public', token))).data();
     const e = t.evento || {};
+
+    if (t.plantilla) {
+      /* Con plantilla propia: recomponemos el diseño + QR en un canvas.
+         Si el servidor de la imagen no permite CORS el canvas queda
+         "manchado" y no se puede exportar; ahi le pedimos una captura. */
+      const s = Object.assign(
+        { qrXPct:66, qrYPct:60, qrSizePct:26, textXPct:66, textYPct:88, fontColor:'#111111', fontSizePct:3.4 },
+        t.stamp || {});
+      const bg = new Image(); bg.crossOrigin = 'anonymous'; bg.src = t.plantilla;
+      await new Promise((ok, no) => { bg.onload = ok; bg.onerror = no; });
+      const cc = document.createElement('canvas');
+      cc.width = bg.naturalWidth; cc.height = bg.naturalHeight;
+      const g = cc.getContext('2d');
+      g.drawImage(bg, 0, 0);
+      const qs = Math.round(cc.width * s.qrSizePct / 100);
+      const qx = Math.round(cc.width * s.qrXPct / 100);
+      const qy = Math.round(cc.height * s.qrYPct / 100);
+      const qi = new Image(); qi.src = qrDataUrl(t.token || token);
+      await new Promise(r => { qi.onload = r; });
+      const pad = Math.round(qs * 0.08);
+      g.fillStyle = '#fff'; g.fillRect(qx - pad, qy - pad, qs + pad * 2, qs + pad * 2);
+      g.drawImage(qi, qx, qy, qs, qs);
+      const fp = Math.max(14, Math.round(cc.width * s.fontSizePct / 100));
+      const tx = Math.round(cc.width * s.textXPct / 100);
+      const ty = Math.round(cc.height * s.textYPct / 100);
+      g.font = `700 ${fp}px Arial, sans-serif`;
+      const bw = Math.max(g.measureText(t.idBoleto || '').width,
+                          g.measureText(t.nombre || '').width) + fp;
+      g.fillStyle = 'rgba(255,255,255,0.86)';
+      g.fillRect(tx - fp * 0.5, ty - fp * 0.5, bw, fp * 2.6);
+      g.fillStyle = s.fontColor || '#111';
+      g.fillText(t.idBoleto || '', tx, ty + fp * 0.8);
+      g.font = `400 ${Math.round(fp * 0.85)}px Arial, sans-serif`;
+      g.fillText(t.nombre || '', tx, ty + fp * 1.9);
+      const b2 = await new Promise(r => cc.toBlob(r, 'image/png'));
+      const f2 = new File([b2], `entrada-${t.idBoleto || 'kegrace'}.png`, { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [f2] })) {
+        await navigator.share({ files: [f2], title: 'Mi entrada KEG RACE' });
+      } else {
+        const a2 = document.createElement('a');
+        a2.href = URL.createObjectURL(b2); a2.download = f2.name; a2.click();
+        setTimeout(() => URL.revokeObjectURL(a2.href), 4000);
+      }
+      return;
+    }
+
     const W = 800, H = 1280, c = document.createElement('canvas');
     c.width = W; c.height = H;
     const x = c.getContext('2d');

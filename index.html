@@ -194,6 +194,7 @@ const DEFAULT_CONFIG = {
   eventInfo: {
     name: 'KEG RACE 2026',
     date: '31 de Octubre, 2026',
+    time: '8:00 PM',
     venue: 'Museo MARTE',
     rules: 'No confetti · Música en vivo hasta 11 PM'
   },
@@ -865,9 +866,13 @@ function adminSettings(cfg) {
       <label>Nombre</label><input id="cfgName" value="${esc(cfg.eventInfo.name)}">
       <label>Fecha (texto)</label><input id="cfgDate" value="${esc(cfg.eventInfo.date)}">
       <label>Fecha (AAAA-MM-DD, para el contador de días)</label><input id="cfgRawDate" type="date" value="${esc(cfg.eventInfo.rawDate||'')}">
+      <label>Hora (aparece en la entrada)</label><input id="cfgTime" placeholder="Ej: 8:00 PM" value="${esc(cfg.eventInfo.time||'')}">
       <label>Lugar</label><input id="cfgVenue" value="${esc(cfg.eventInfo.venue)}">
       <label>Reglas (aparece en la entrada)</label><input id="cfgRules" value="${esc(cfg.eventInfo.rules)}">
       <button onclick="saveEventInfo()">Guardar</button>
+      <div class="info-note" style="margin-top:10px;">Las entradas ya enviadas guardan su propia copia
+        de estos datos. Si cambiaste algo y querés corregir las que ya salieron, usá este botón.</div>
+      <button class="secondary" onclick="resyncEventInfo()">Actualizar entradas ya emitidas</button>
     </div>
         <div class="card">
       <h3>Cuentas y seguridad</h3>
@@ -931,6 +936,7 @@ async function saveEventInfo() {
     name: document.getElementById('cfgName').value.trim(),
     date: document.getElementById('cfgDate').value.trim(),
     rawDate: document.getElementById('cfgRawDate').value.trim(),
+    time: document.getElementById('cfgTime').value.trim(),
     venue: document.getElementById('cfgVenue').value.trim(),
     rules: document.getElementById('cfgRules').value.trim()
   }});
@@ -997,6 +1003,13 @@ function adminDesign(cfg) {
       <input type="file" id="templateFile" accept="image/png,image/jpeg" style="display:none" onchange="onTemplateFileChosen(event)">
       <div class="row" style="margin-top:10px;">
         <button class="secondary" onclick="document.getElementById('templateFile').click()">${hasTemplate?'Cambiar diseño':'Subir diseño'}</button>
+        <div class="divider"></div>
+        <div class="info-note">Si la subida se queda pegada en "Subiendo diseño…", es porque tu proyecto
+          exige plan de pago para Cloud Storage. Rodeo gratis: subí la imagen a imgur.com, copiá el
+          <b>enlace directo</b> (el que termina en .png o .jpg) y pegalo acá.</div>
+        <label>Enlace de la imagen</label>
+        <input id="cfgTplUrl" placeholder="https://i.imgur.com/xxxxx.png">
+        <button class="secondary" onclick="saveTemplateUrl()">Usar este enlace</button>
         ${hasTemplate ? `<button class="danger" onclick="removeTemplate()">Quitar diseño</button>` : ''}
       </div>
       <div id="uploadProgress"></div>
@@ -1053,6 +1066,22 @@ async function onTemplateFileChosen(evt) {
     document.getElementById('uploadProgress').innerHTML = `<div class="warn">Error subiendo: ${esc(e.message||e)}</div>`;
   }
 }
+/* Permite usar una imagen alojada en cualquier lado, sin Cloud Storage.
+   Es el rodeo para no tener que activar el plan Blaze. */
+async function saveTemplateUrl() {
+  const url = document.getElementById('cfgTplUrl').value.trim();
+  if (!/^https:\/\/.+\.(png|jpe?g|webp)(\?.*)?$/i.test(url)) {
+    return toast('Pegá un enlace directo que termine en .png, .jpg o .webp');
+  }
+  const img = new Image();
+  img.onload = async () => {
+    await saveConfig({ template: { url, path: null } });
+    toast('Diseño guardado'); render();
+  };
+  img.onerror = () => toast('No se pudo cargar esa imagen. Revisá que el enlace sea directo.');
+  img.src = url;
+}
+
 async function removeTemplate() {
   if (!confirm('¿Quitar el diseño personalizado y volver al marco por defecto?')) return;
   const cfg = await getConfig();
@@ -1418,6 +1447,44 @@ async function createDoorAccount() {
   }
 }
 
+/* Un solo lugar donde se arma el bloque de evento que ve el comprador,
+   para que no se vuelvan a desincronizar los nombres de los campos. */
+function eventoPublico(cfg) {
+  const e = cfg.eventInfo || {};
+  return {
+    nombre: e.name || 'KEG RACE',
+    fecha:  e.date || '',
+    hora:   e.time || '',
+    lugar:  e.venue || '',
+    reglas: e.rules || ''
+  };
+}
+
+/* Reescribe los datos del evento en TODAS las entradas ya emitidas.
+   Necesario porque cada entrada guarda su propia copia (para poder abrirse
+   sin contrasena), asi que cambiar la config no las actualiza sola. */
+async function resyncEventInfo() {
+  if (!confirm('Se actualizarán fecha, hora y lugar en todas las entradas ya emitidas. ¿Continuar?')) return;
+  try {
+    const cfg = await getConfig();
+    const evento = eventoPublico(cfg);
+    const ventas = await getVentas();
+    const con = ventas.filter(v => v.token);
+    if (!con.length) return toast('No hay entradas con enlace todavía');
+    let batch = writeBatch(db), n = 0;
+    for (const v of con) {
+      batch.set(doc(db, 'tickets_public', v.token), {
+        evento,
+        plantilla: (cfg.template && cfg.template.url) || null,
+        stamp: cfg.stamp || null
+      }, { merge: true });
+      if (++n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+    }
+    if (n) await batch.commit();
+    toast(`${con.length} entradas actualizadas`);
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
 async function saveAforo() {
   const n = Number(document.getElementById('cfgAforo').value);
   if (!n || n < 1) return toast('Poné un número válido');
@@ -1527,9 +1594,9 @@ async function submitSale() {
     const e = cfg.eventInfo || {};
     await setDoc(doc(db, 'tickets_public', sale.token), {
       token: sale.token, idBoleto, nombre: buyerName, tipo: tt.name, anulado: false,
-      evento: { nombre: e.eventName || 'KEG RACE', fecha: e.eventDate || '',
-                hora: e.doorsOpen || e.eventTime || '', lugar: e.venue || '',
-                reglas: e.rules || '' }
+      evento: eventoPublico(cfg),
+      plantilla: (cfg.template && cfg.template.url) || null,
+      stamp: cfg.stamp || null
     });
 
     toast('Venta registrada');
@@ -1956,10 +2023,10 @@ Object.assign(window, {
   editAmbassador, removeAmbassador, saveAmbassadorModal,
   editTicketType, removeTicketType, saveTicketTypeModal,
   saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll,
-  onTemplateFileChosen, removeTemplate, onStampChange, saveStampConfig,
+  onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
   closeModal, setAmbassadorTab, submitSale,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
-  backfillTokens, createDoorAccount, saveAforo, recalcCounters
+  backfillTokens, createDoorAccount, saveAforo, recalcCounters, resyncEventInfo
 });
 
 /* ---------- INIT ---------- */
