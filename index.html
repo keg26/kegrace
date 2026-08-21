@@ -474,7 +474,8 @@ function logout() {
 }
 
 /* ================== ADMIN ================== */
-const ADMIN_TAB_LABELS = { dashboard:'Tablero', sales:'Ventas', access:'Acceso', ambassadors:'Embajadores', tickets:'Entradas', design:'Diseño', settings:'Ajustes' };
+const ADMIN_TAB_LABELS = {
+  newsale: 'Nueva venta', dashboard:'Tablero', sales:'Ventas', access:'Acceso', ambassadors:'Embajadores', tickets:'Entradas', design:'Diseño', settings:'Ajustes' };
 
 async function renderAdmin(app) {
   const cfg = await getConfig();
@@ -484,6 +485,7 @@ async function renderAdmin(app) {
       <div class="eyebrow">Panel de administración</div>
       <h1 class="pagetitle">${esc(ADMIN_TAB_LABELS[state.adminTab] || 'Tablero')}</h1>
       <div class="segtabs">
+        <button class="segtab ${state.adminTab==='newsale'?'active':''}" onclick="setAdminTab('newsale')">+ Nueva venta</button>
         <button class="segtab ${state.adminTab==='dashboard'?'active':''}" onclick="setAdminTab('dashboard')">Tablero</button>
         <button class="segtab ${state.adminTab==='sales'?'active':''}" onclick="setAdminTab('sales')">Ventas</button>
         <button class="segtab ${state.adminTab==='access'?'active':''}" onclick="setAdminTab('access')">Acceso</button>
@@ -506,6 +508,9 @@ async function renderAdmin(app) {
     const unsubV = listenVentas(ventas => { _cacheVentas = ventas; tryRender(); });
     const unsubA = listenAmbassadors(ambs => { _cacheAmbs = ambs; tryRender(); });
     state.unsubs.push(unsubV, unsubA);
+  } else if (state.adminTab === 'newsale') {
+    content.innerHTML = ambassadorSellForm(cfg);
+    setupSellForm(cfg);
   } else if (state.adminTab === 'sales') {
     const unsubV = listenVentas(ventas => { content.innerHTML = adminSales(cfg, ventas); });
     state.unsubs.push(unsubV);
@@ -1232,14 +1237,33 @@ async function renderAmbassador(app) {
             <div class="stat"><div class="stat-value">${fmtMoney(totalCommission)}</div><div class="stat-label">Comisión</div></div>
           </div>
         </div>
+        ${(() => {
+          /* Cola de pendientes: toda venta cuyo enlace todavia no se mando.
+             Es la red de seguridad contra cobrarle a alguien y que se quede
+             sin entrada porque se cerro WhatsApp a medio envio. */
+          const pend = ventas.filter(v => !v.enviado);
+          if (!pend.length) return '';
+          return `<div class="card" style="border-color:var(--accent)">
+            <h3>Pendientes de enviar (${pend.length})</h3>
+            <div class="info-note">Estas personas ya pagaron pero todavía no recibieron su entrada.</div>
+            ${pend.map(v => `<div class="list-item">
+              <div class="list-item-main">
+                <div class="list-item-title">${esc(v.nombreComprador)}</div>
+                <div class="list-item-sub">${esc(v.telefono||'sin teléfono')} · ${esc(v.tipoEntrada||'')}</div>
+              </div>
+              <button class="icon-btn success" onclick="resendSale('${v.idBoleto}')">Enviar</button>
+            </div>`).join('')}
+          </div>`;
+        })()}
         <div class="card">
           <h3>Mis ventas</h3>
           ${ventas.length===0 ? '<div class="empty">Aún no has vendido entradas.</div>' :
             ventas.map(v => `<div class="list-item">
               <div class="list-item-main">
-                <div class="list-item-title">${esc(v.nombreComprador)}</div>
+                <div class="list-item-title">${esc(v.nombreComprador)}${v.enviado?'':' <span style="color:var(--accent)">· sin enviar</span>'}</div>
                 <div class="list-item-sub">${esc(v.tipoEntrada||'')} · ${fmtMoney(v.precio)} · ${fmtDate(v.fechaVenta)}</div>
               </div>
+              <button class="icon-btn success" onclick="resendSale('${v.idBoleto}')">WhatsApp</button>
               <button class="icon-btn secondary" onclick="viewTicket('${v.idBoleto}')">Ver</button>
             </div>`).join('')
           }
@@ -1256,9 +1280,9 @@ function ambassadorSellForm(cfg) {
     <div class="card">
       <label>Nombre del comprador *</label>
       <input id="fBuyer" placeholder="Nombre completo">
-      <label>DUI del comprador (opcional)</label>
-      <input id="fDui" placeholder="Ej: 04512345-6">
-      <label>Teléfono (opcional, para WhatsApp)</label>
+      <label>DUI del comprador *</label>
+      <input id="fDui" placeholder="Ej: 04512345-6" inputmode="numeric">
+      <label>Teléfono * (a este número se le manda la entrada)</label>
       <input id="fPhone" placeholder="Ej: 7777-7777" inputmode="tel">
       <label>Tipo de entrada *</label>
       <select id="fType">
@@ -1284,13 +1308,53 @@ function ambassadorSellForm(cfg) {
 }
 function setupSellForm(cfg) {
   const sel = document.getElementById('fType');
+  const pay = document.getElementById('fPayment');
   const updateTotal = () => {
     const opt = sel.options[sel.selectedIndex];
     const hasPrice = opt && opt.dataset.price !== undefined;
     document.getElementById('fTotal').textContent = hasPrice ? fmtMoney(Number(opt.dataset.price)) : '—';
   };
-  sel.addEventListener('change', updateTotal);
+  sel.addEventListener('change', () => { remember('lastType', sel.value); updateTotal(); });
+  pay.addEventListener('change', () => remember('lastPay', pay.value));
+
+  /* Vender 30 Early Bird seguidos no deberia obligar a elegir "Early Bird"
+     30 veces. Se recuerda lo ultimo usado en ESTE dispositivo. */
+  const lt = recall('lastType'), lp = recall('lastPay');
+  if (lt && [...sel.options].some(o => o.value === lt)) sel.value = lt;
+  if (lp && [...pay.options].some(o => o.value === lp)) pay.value = lp;
   updateTotal();
+  const b = document.getElementById('fBuyer'); if (b) b.focus();
+}
+function remember(k, v) { try { localStorage.setItem('kr_' + k, v); } catch (e) {} }
+function recall(k) { try { return localStorage.getItem('kr_' + k); } catch (e) { return null; } }
+
+/* Normaliza a formato internacional para wa.me: 7777-7777 -> 50377777777 */
+function waNumber(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.length === 8) d = '503' + d;
+  if (d.length === 11 && d.startsWith('503')) return d;
+  return d;
+}
+function ticketUrl(token) {
+  return location.origin + location.pathname.replace(/[^/]*$/, '') + 't.html?k=' + encodeURIComponent(token);
+}
+function waMessage(sale, cfg) {
+  const e = cfg.eventInfo || {};
+  return `¡Listo ${sale.nombreComprador}! 🎃\n\nTu entrada para *${e.eventName || 'KEG RACE'}* está confirmada.\n\n`
+    + `📅 ${e.eventDate || ''}\n📍 ${e.venue || ''}\n🎟️ ${sale.tipoEntrada}  ·  ${sale.idBoleto}\n\n`
+    + `Abrí este enlace para ver tu código QR:\n${ticketUrl(sale.token)}\n\n`
+    + `Guardalo o tomale captura. Se escanea una sola vez en la puerta.`;
+}
+function openWhatsApp(sale, cfg) {
+  const n = waNumber(sale.telefono);
+  const url = (n ? 'https://wa.me/' + n : 'https://wa.me/') + '?text=' + encodeURIComponent(waMessage(sale, cfg));
+  window.open(url, '_blank');
+  markSent(sale.idBoleto);
+}
+async function markSent(idBoleto) {
+  try { await setDoc(doc(db, 'ventas', idBoleto), { enviado: true, fechaEnvio: serverTimestamp() }, { merge: true }); }
+  catch (e) {}
 }
 
 /* Deja el formulario completamente en blanco, sin nada precargado — ni texto
@@ -1304,12 +1368,10 @@ function resetSellForm() {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
-  const sel = document.getElementById('fType');
-  if (sel) sel.selectedIndex = 0; // vuelve al placeholder "Selecciona un tipo…"
-  const pay = document.getElementById('fPayment');
-  if (pay) pay.selectedIndex = 0; // vuelve al placeholder "Selecciona un método…"
-  const totalEl = document.getElementById('fTotal');
-  if (totalEl) totalEl.textContent = '—';
+  /* El tipo de entrada y el metodo de pago se DEJAN puestos a proposito:
+     en una jornada de ventas casi siempre se repiten, y volver a elegirlos
+     en cada venta era medio minuto perdido por entrada. */
+  const b = document.getElementById('fBuyer'); if (b) b.focus();
 }
 
 async function createDoorAccount() {
@@ -1366,6 +1428,8 @@ async function submitSale() {
   const typeId = sel.value;
   const payment = document.getElementById('fPayment').value;
   if (!buyerName) return toast('Ingresa nombre del comprador');
+  if (!dui) return toast('Ingresa el DUI del comprador');
+  if (!waNumber(phone)) return toast('Ingresa un teléfono válido — es a donde se manda la entrada');
   if (!typeId) return toast('Selecciona el tipo de entrada');
   const tt = cfg.ticketTypes.find(t => t.id === typeId);
   if (!tt) return toast('Tipo inválido');
@@ -1397,6 +1461,18 @@ async function submitSale() {
       ticketTypeId: tt.id
     };
     await createVenta(sale);
+
+    /* Copia PUBLICA con lo minimo para mostrar la entrada: nombre, tipo y
+       codigo. Nada de DUI, telefono ni precio. Vive en su propia coleccion
+       para que t.html la lea sin pedir contrasena, y sin abrir /ventas. */
+    const e = cfg.eventInfo || {};
+    await setDoc(doc(db, 'tickets_public', sale.token), {
+      token: sale.token, idBoleto, nombre: buyerName, tipo: tt.name, anulado: false,
+      evento: { nombre: e.eventName || 'KEG RACE', fecha: e.eventDate || '',
+                hora: e.doorsOpen || e.eventTime || '', lugar: e.venue || '',
+                reglas: e.rules || '' }
+    });
+
     toast('Venta registrada');
     resetSellForm();
     viewTicket(idBoleto);
@@ -1444,7 +1520,7 @@ async function viewTicket(idBoleto) {
     <div class="ticket-canvas-wrap"><canvas id="ticketCanvas"></canvas></div>
     <div style="text-align:center; font-family:monospace; font-size:12px; color:var(--muted); margin-top:8px;">${esc(sale.idBoleto)}</div>
     <div class="row" style="margin-top:14px;">
-      <button class="success" id="btnWa" disabled onclick="shareWhatsApp('${idBoleto}')">Preparando…</button>
+      <button class="success" id="btnWa" onclick="sendViaLink('${idBoleto}')">Enviar por WhatsApp</button>
       <button class="secondary" id="btnImg" disabled onclick="downloadTicketPNG('${idBoleto}')">Imagen</button>
     </div>
     <div class="row" style="margin-top:8px;">
@@ -1517,6 +1593,35 @@ ID: ${sale.idBoleto}
 /* Deliberadamente NO async: navigator.share() debe llamarse en el mismo tick
    del click. Si el archivo no está en caché todavía (raro, botón deshabilitado
    hasta entonces), avisamos y no seguimos — mejor eso que perder el gesto. */
+/* El camino rapido: abre WhatsApp YA en el chat de ese numero, con el
+   mensaje y el enlace escritos. Sin selector de compartir, sin buscar el
+   contacto, sin esperar a que se genere el PDF. Un toque y "enviar". */
+/* Reenvio en un toque desde cualquier listado, sin abrir el ticket. */
+async function resendSale(idBoleto) {
+  try {
+    const cfg = await getConfig();
+    const s = await getDoc(doc(db, 'ventas', idBoleto));
+    if (!s.exists()) return toast('No se encontró la venta');
+    const sale = s.data();
+    if (!sale.token) return toast('Entrada sin enlace. Usá "Generar tokens faltantes" en Ajustes.');
+    openWhatsApp(sale, cfg);
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
+async function sendViaLink(idBoleto) {
+  const assets = ticketAssetCache.get(idBoleto);
+  let sale, cfg;
+  if (assets) { sale = assets.sale; cfg = assets.cfg; }
+  else {
+    cfg = await getConfig();
+    const s = await getDoc(doc(db, 'ventas', idBoleto));
+    if (!s.exists()) return toast('No se encontró la venta');
+    sale = s.data();
+  }
+  if (!sale.token) return toast('Esta entrada es vieja y no tiene enlace. Usá "Generar tokens faltantes" en Ajustes.');
+  openWhatsApp(sale, cfg);
+}
+
 function shareWhatsApp(idBoleto) {
   const assets = ticketAssetCache.get(idBoleto);
   if (!assets) { toast('Espera un segundo, se sigue preparando la entrada…'); return; }
@@ -1794,7 +1899,7 @@ Object.assign(window, {
   saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll,
   onTemplateFileChosen, removeTemplate, onStampChange, saveStampConfig,
   closeModal, setAmbassadorTab, submitSale,
-  shareWhatsApp, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
+  shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
   backfillTokens, createDoorAccount
 });
 
