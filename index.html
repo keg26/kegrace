@@ -927,7 +927,13 @@ function adminSettings(cfg) {
       <input id="cfgWipeCode" placeholder="Elige un código que solo tú sepas">
       <button class="secondary" onclick="saveWipeCode()">Guardar código de borrado</button>
       <div class="divider"></div>
-      <button class="danger" onclick="confirmWipeAll()">Borrar todos los datos</button>
+      <div class="info-note">Borra ventas, entradas públicas, registros de la puerta y el contador.
+        <b>Mantiene tus embajadores, cuentas y configuración.</b> Es lo que querés para arrancar en cero
+        después de las pruebas.</div>
+      <button class="danger" onclick="confirmWipeSales()">Borrar solo las ventas</button>
+      <div class="divider"></div>
+      <div class="info-note">Esta otra borra además a los embajadores. Rara vez es lo que querés.</div>
+      <button class="danger" onclick="confirmWipeAll()">Borrar TODO (incluye embajadores)</button>
     </div>
   `;
 }
@@ -973,6 +979,45 @@ async function confirmWipeAll() {
   }
   await wipeAll();
 }
+/* Limpieza de arranque: deja el evento en cero sin destruir el equipo
+   de embajadores ni la configuracion. Borra las tres colecciones que
+   crecen con las ventas y pone el contador a cero, que es justo lo que
+   el boton viejo no hacia. */
+async function confirmWipeSales() {
+  const cfg = await getConfig();
+  if (!cfg.wipeCode) return toast('Primero definí un código de borrado arriba');
+  const code = prompt('Escribí tu código de borrado para confirmar:');
+  if (code === null) return;
+  if (code !== cfg.wipeCode) return toast('Código incorrecto');
+  if (!confirm('Se borrarán TODAS las ventas y sus entradas. Los embajadores se mantienen. ¿Seguro?')) return;
+  await wipeSalesOnly();
+}
+
+async function delAll(name, ids) {
+  for (let i = 0; i < ids.length; i += 400) {
+    const b = writeBatch(db);
+    ids.slice(i, i + 400).forEach(id => b.delete(doc(db, name, id)));
+    await b.commit();
+  }
+}
+
+async function wipeSalesOnly() {
+  try {
+    toast('Borrando…');
+    const ventas = await getVentas();
+    const [pub, chk] = await Promise.all([
+      getDocs(collection(db, 'tickets_public')).catch(() => ({ docs: [] })),
+      getDocs(collection(db, 'checkins')).catch(() => ({ docs: [] }))
+    ]);
+    await delAll('ventas', ventas.map(v => v.idBoleto));
+    await delAll('tickets_public', pub.docs.map(d => d.id));
+    await delAll('checkins', chk.docs.map(d => d.id));
+    await setDoc(doc(db, 'counters', 'tickets'), { counts: {}, total: 0 }, { merge: false });
+    toast(`Listo: ${ventas.length} ventas borradas. Tablero en cero.`);
+    render();
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
 async function wipeAll() {
   const [ventas, ambs] = await Promise.all([getVentas(), getAmbassadors()]);
   const batchSize = 400;
@@ -983,8 +1028,15 @@ async function wipeAll() {
       await batch.commit();
     }
   }
+  const [pub, chk] = await Promise.all([
+    getDocs(collection(db, 'tickets_public')).catch(() => ({ docs: [] })),
+    getDocs(collection(db, 'checkins')).catch(() => ({ docs: [] }))
+  ]);
   await wipeCollection('ventas', ventas.map(v => v.idBoleto));
+  await wipeCollection('tickets_public', pub.docs.map(d => d.id));
+  await wipeCollection('checkins', chk.docs.map(d => d.id));
   await wipeCollection('ambassadors', ambs.map(a => a.id));
+  await setDoc(doc(db, 'counters', 'tickets'), { counts: {}, total: 0 }, { merge: false });
   toast('Todo borrado'); render();
 }
 
@@ -2022,7 +2074,7 @@ Object.assign(window, {
   doLogin, logout, setAdminTab, exportCSV, viewTicket,
   editAmbassador, removeAmbassador, saveAmbassadorModal,
   editTicketType, removeTicketType, saveTicketTypeModal,
-  saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll,
+  saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll, confirmWipeSales,
   onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
   closeModal, setAmbassadorTab, submitSale,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
