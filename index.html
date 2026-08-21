@@ -779,7 +779,23 @@ async function removeAmbassador(id) {
 }
 
 function adminTickets(cfg, ventas) {
+  const usados = ventas.length;
+  const aforo = Number(cfg.aforoTotal || 1000);
   return `
+    <div class="card">
+      <h3>Control de aforo</h3>
+      <div class="grid-2">
+        <div class="stat"><div class="stat-value">${usados}</div><div class="stat-label">Vendidas</div></div>
+        <div class="stat"><div class="stat-value" style="color:${usados>=aforo?'var(--accent)':'inherit'}">${Math.max(0,aforo-usados)}</div><div class="stat-label">Disponibles</div></div>
+      </div>
+      <label>Aforo máximo del local</label>
+      <input id="cfgAforo" type="number" value="${aforo}">
+      <button class="secondary" onclick="saveAforo()">Guardar aforo</button>
+      <div class="divider"></div>
+      <div class="info-note">Si los números de arriba no coinciden con la realidad —por ejemplo
+        después de borrar ventas de prueba— recalculá los contadores.</div>
+      <button class="secondary" onclick="recalcCounters()">Recalcular contadores</button>
+    </div>
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <h3 style="margin:0">Tipos de entrada</h3>
@@ -1402,6 +1418,26 @@ async function createDoorAccount() {
   }
 }
 
+async function saveAforo() {
+  const n = Number(document.getElementById('cfgAforo').value);
+  if (!n || n < 1) return toast('Poné un número válido');
+  await saveConfig({ aforoTotal: n });
+  toast('Aforo guardado: ' + n); render();
+}
+
+/* Reconstruye el contador contando las ventas reales. Necesario despues de
+   borrar ventas (el contador no baja solo) o la primera vez que se usa. */
+async function recalcCounters() {
+  try {
+    const ventas = await getVentas();
+    const counts = {};
+    ventas.forEach(v => { if (v.ticketTypeId) counts[v.ticketTypeId] = (counts[v.ticketTypeId] || 0) + 1; });
+    await setDoc(doc(db, 'counters', 'tickets'), { counts, total: ventas.length }, { merge: false });
+    toast(`Contadores recalculados: ${ventas.length} entradas`);
+    render();
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
 async function backfillTokens() {
   try {
     const snap = await getDocs(collection(db, 'ventas'));
@@ -1437,9 +1473,6 @@ async function submitSale() {
 
   btn.disabled = true; btn.textContent = 'Registrando…';
   try {
-    const sold = await countVentasByType(typeId);
-    if (sold >= tt.capacity) { toast(`${tt.name} agotado`); return; }
-
     const idBoleto = await generateUniqueTicketId();
     const ambs = await getAmbassadors();
     const me = ambs.find(a => a.id === state.userId);
@@ -1460,7 +1493,33 @@ async function submitSale() {
       ambassadorId: state.userId,
       ticketTypeId: tt.id
     };
-    await createVenta(sale);
+    /* CUPO ATOMICO.
+       Antes se contaba y despues se creaba: entre esas dos operaciones pasa
+       medio segundo, y con varios embajadores vendiendo a la vez dos podian
+       pasar el chequeo con un solo cupo libre. Ahora el contador y la venta
+       se escriben DENTRO de la misma transaccion: Firestore garantiza que
+       si dos intentan a la vez, uno de los dos se reintenta y ve el numero
+       ya actualizado. Es imposible pasarse del cupo. */
+    const counterRef = doc(db, 'counters', 'tickets');
+    const aforoTotal = Number(cfg.aforoTotal || 1000);
+    try {
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(counterRef);
+        const data = snap.exists() ? (snap.data() || {}) : {};
+        const counts = Object.assign({}, data.counts || {});
+        const usado = Number(counts[tt.id] || 0);
+        const total = Number(data.total || 0);
+        if (usado >= tt.capacity) throw new Error('AGOTADO');
+        if (total >= aforoTotal) throw new Error('AFORO');
+        counts[tt.id] = usado + 1;
+        tx.set(counterRef, { counts, total: total + 1 }, { merge: true });
+        tx.set(doc(db, 'ventas', idBoleto), sale);
+      });
+    } catch (te) {
+      if (te.message === 'AGOTADO') return toast(`${tt.name} está agotado`);
+      if (te.message === 'AFORO') return toast(`Aforo completo (${aforoTotal} personas)`);
+      throw te;
+    }
 
     /* Copia PUBLICA con lo minimo para mostrar la entrada: nombre, tipo y
        codigo. Nada de DUI, telefono ni precio. Vive en su propia coleccion
@@ -1900,7 +1959,7 @@ Object.assign(window, {
   onTemplateFileChosen, removeTemplate, onStampChange, saveStampConfig,
   closeModal, setAmbassadorTab, submitSale,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
-  backfillTokens, createDoorAccount
+  backfillTokens, createDoorAccount, saveAforo, recalcCounters
 });
 
 /* ---------- INIT ---------- */
