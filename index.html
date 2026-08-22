@@ -1862,10 +1862,21 @@ async function buildGroupPDF(idList, cfg) {
         pdf.setFillColor(255, 255, 255);
         pdf.rect(qx - 6, qy - 6, qs + 12, qs + 12, 'F');
         pdf.addImage(qr.toDataURL('image/png'), 'PNG', qx, qy, qs, qs);
+        /* Igual que en la imagen: recuadro claro para que el codigo se lea
+           siempre, sin importar que tan oscuro sea el arte de fondo. */
+        const fs = Math.max(9, iw * (st.fontSizePct || 3.4) / 100);
+        const txx = 40 + iw * (st.textXPct || 66) / 100;
+        const txy = 40 + ih * (st.textYPct || 88) / 100;
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(fs);
+        const l1 = String(s.idBoleto || '');
+        const l2 = `${s.nombreComprador || ''} · ${s.indice || 1}/${s.totalGrupo || idList.length}`;
+        const bw = Math.max(pdf.getTextWidth(l1), pdf.getTextWidth(l2)) + fs * 1.1;
+        pdf.setFillColor(255, 255, 255);
+        pdf.roundedRect(txx - fs * 0.55, txy - fs * 0.95, bw, fs * 2.7, fs * 0.25, fs * 0.25, 'F');
         pdf.setTextColor(17, 17, 17);
-        pdf.setFontSize(11);
-        pdf.text(`${s.idBoleto}  ·  ${s.nombreComprador}`, 40 + iw * (st.textXPct || 66) / 100,
-                 40 + ih * (st.textYPct || 88) / 100);
+        pdf.text(l1, txx, txy);
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(fs * 0.85);
+        pdf.text(l2, txx, txy + fs * 1.15);
       } else {
         pdf.setFillColor(10, 10, 10); pdf.rect(0, 0, W, pdf.internal.pageSize.getHeight(), 'F');
         pdf.setTextColor(230, 64, 43); pdf.setFontSize(26);
