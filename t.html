@@ -79,8 +79,62 @@ function qrDataUrl(text) {
   return q.createDataURL(8, 8);
 }
 
+/* Una compra puede traer varias entradas. El enlace ?g= apunta al indice
+   del grupo; ?k= sigue funcionando para una entrada suelta. */
+async function renderOne(t, token, idx, total) {
+  const e = t.evento || {};
+  const cab = total > 1
+    ? `<div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+         font-weight:700;margin:26px 0 8px">Entrada ${idx} de ${total}</div>` : '';
+
+  if (t.plantilla) {
+    const s = Object.assign(
+      { qrXPct:66, qrYPct:60, qrSizePct:26, textXPct:66, textYPct:88, fontColor:'#111111', fontSizePct:3.4 },
+      t.stamp || {});
+    return cab + `
+      <div style="position:relative;border-radius:14px;overflow:hidden;background:#111">
+        <img src="${esc(t.plantilla)}" alt="Entrada ${esc(t.idBoleto||'')}"
+             style="width:100%;display:block" onerror="this.style.display='none'">
+        <div style="position:absolute;left:${s.qrXPct}%;top:${s.qrYPct}%;width:${s.qrSizePct}%;
+                    background:#fff;padding:0.6%;border-radius:3px;line-height:0">
+          <img data-qr="${esc(t.token||token)}" alt="Código QR"
+               style="width:100%;display:block;image-rendering:pixelated">
+        </div>
+        <div style="position:absolute;left:${s.textXPct}%;top:${s.textYPct}%;
+                    background:rgba(255,255,255,.86);color:${esc(s.fontColor)};
+                    padding:0.6% 1.2%;border-radius:3px;font-size:${s.fontSizePct}vw;
+                    line-height:1.25;white-space:nowrap">
+          <b>${esc(t.idBoleto||'')}</b><br>${esc(t.nombre||'')}
+        </div>
+      </div>`;
+  }
+
+  return cab + `
+    <div class="tick">
+      <div class="tick-top">
+        <div class="eyebrow">Entrada válida para una persona</div>
+        <h1 class="evt">${esc(e.nombre || 'KEG RACE')}</h1>
+        <div class="meta">
+          <div><div class="k">Fecha</div><div class="v">${esc(e.fecha || 'Por confirmar')}</div></div>
+          <div><div class="k">Hora</div><div class="v">${esc(e.hora || '—')}</div></div>
+          <div><div class="k">Lugar</div><div class="v">${esc(e.lugar || 'Por confirmar')}</div></div>
+          <div><div class="k">Tipo</div><div class="v">${esc(t.tipo || '—')}</div></div>
+        </div>
+      </div>
+      <div class="perf"><span></span></div>
+      <div class="tick-bot">
+        <div class="qrbox"><img data-qr="${esc(t.token||token)}" alt="Código QR de la entrada"></div>
+        <div class="code">${esc(t.idBoleto || '')}</div>
+        <div class="who">${esc(t.nombre || '')}</div>
+      </div>
+    </div>`;
+}
+
 (async () => {
-  const token = new URLSearchParams(location.search).get('k');
+  const params = new URLSearchParams(location.search);
+  const grupo = params.get('g');
+  const token = params.get('k');
+  if (grupo) return loadGroup(grupo);
   if (!token) return fail('Falta el código de la entrada en el enlace.');
   if (!window.KEGRACE_FIREBASE || !window.KEGRACE_FIREBASE.projectId) {
     return fail('El sitio no está configurado todavía.');
@@ -93,67 +147,53 @@ function qrDataUrl(text) {
     if (t.anulado) return fail('Esta entrada fue anulada y ya no es válida.');
     const e = t.evento || {};
 
-    /* Si hay plantilla, la entrada ES el diseño con el QR encima, en las
-       mismas coordenadas que configuraste en DISEÑO. Se superpone con CSS
-       en porcentajes: se adapta a cualquier pantalla y no depende de CORS. */
-    if (t.plantilla) {
-      const s = Object.assign(
-        { qrXPct:66, qrYPct:60, qrSizePct:26, textXPct:66, textYPct:88, fontColor:'#111111', fontSizePct:3.4 },
-        t.stamp || {});
-      out.innerHTML = `
-        <div style="position:relative;border-radius:14px;overflow:hidden;background:#111">
-          <img src="${esc(t.plantilla)}" alt="Entrada ${esc(t.idBoleto||'')}"
-               style="width:100%;display:block" onerror="this.style.display='none'">
-          <div style="position:absolute;left:${s.qrXPct}%;top:${s.qrYPct}%;width:${s.qrSizePct}%;
-                      background:#fff;padding:0.6%;border-radius:3px;line-height:0">
-            <img id="qrimg" alt="Código QR" style="width:100%;display:block;image-rendering:pixelated">
-          </div>
-          <div style="position:absolute;left:${s.textXPct}%;top:${s.textYPct}%;
-                      background:rgba(255,255,255,.86);color:${esc(s.fontColor)};
-                      padding:0.6% 1.2%;border-radius:3px;font-size:${s.fontSizePct}vw;
-                      line-height:1.25;white-space:nowrap">
-            <b>${esc(t.idBoleto||'')}</b><br>${esc(t.nombre||'')}
-          </div>
-        </div>
-        <button class="btn" onclick="guardar()">Guardar como imagen</button>
-        <button class="btn sec" onclick="brillo()">Subir el brillo para escanear</button>
-        ${e.reglas ? `<div class="rules"><h3>Antes de venir</h3><p>${esc(e.reglas)}</p></div>` : ''}
-        <div class="tip">Mostrá este código en la puerta. Se escanea una sola vez:
-          si se lo reenviás a alguien más, el primero que llegue entra y vos te quedás afuera.</div>`;
-      document.getElementById('qrimg').src = qrDataUrl(t.token || token);
-      return;
-    }
-
-    out.innerHTML = `
-      <div class="tick" id="tick">
-        <div class="tick-top">
-          <div class="eyebrow">Entrada válida para una persona</div>
-          <h1 class="evt">${esc(e.nombre || 'KEG RACE')}</h1>
-          <div class="meta">
-            <div><div class="k">Fecha</div><div class="v">${esc(e.fecha || 'Por confirmar')}</div></div>
-            <div><div class="k">Hora</div><div class="v">${esc(e.hora || '—')}</div></div>
-            <div><div class="k">Lugar</div><div class="v">${esc(e.lugar || 'Por confirmar')}</div></div>
-            <div><div class="k">Tipo</div><div class="v">${esc(t.tipo || '—')}</div></div>
-          </div>
-        </div>
-        <div class="perf"><span></span></div>
-        <div class="tick-bot">
-          <div class="qrbox"><img id="qrimg" alt="Código QR de la entrada"></div>
-          <div class="code">${esc(t.idBoleto || '')}</div>
-          <div class="who">${esc(t.nombre || '')}</div>
-        </div>
-      </div>
-      <button class="btn" onclick="guardar()">Guardar como imagen</button>
-      <button class="btn sec" onclick="brillo()">Subir el brillo para escanear</button>
-      ${e.reglas ? `<div class="rules"><h3>Antes de venir</h3><p>${esc(e.reglas)}</p></div>` : ''}
-      <div class="tip">Mostrá este código en la puerta. Se escanea una sola vez:
-        si se lo reenviás a alguien más, el primero que llegue entra y vos te quedás afuera.</div>`;
-
-    document.getElementById('qrimg').src = qrDataUrl(t.token || token);
+    out.innerHTML = await renderOne(t, token, 1, 1)
+      + `<button class="btn" onclick="guardar()">Guardar como imagen</button>
+         ${e.reglas ? `<div class="rules"><h3>Antes de venir</h3><p>${esc(e.reglas)}</p></div>` : ''}
+         <div class="tip">Mostrá este código en la puerta. Se escanea una sola vez:
+           si se lo reenviás a alguien más, el primero que llegue entra y vos te quedás afuera.</div>`;
+    pintarQrs();
   } catch (err) {
     fail('No se pudo cargar la entrada. Revisá tu conexión.');
   }
 })();
+
+async function loadGroup(grupo) {
+  if (!window.KEGRACE_FIREBASE || !window.KEGRACE_FIREBASE.projectId) {
+    return fail('El sitio no está configurado todavía.');
+  }
+  try {
+    const db = getFirestore(initializeApp(window.KEGRACE_FIREBASE));
+    const g = await getDoc(doc(db, 'groups_public', grupo));
+    if (!g.exists()) return fail('Esta compra no existe o fue anulada.');
+    const tokens = g.data().tokens || [];
+    const docs = await Promise.all(tokens.map(tk => getDoc(doc(db, 'tickets_public', tk))));
+    const items = docs.filter(d => d.exists()).map(d => d.data()).filter(t => !t.anulado);
+    if (!items.length) return fail('Estas entradas fueron anuladas.');
+
+    const e = items[0].evento || {};
+    const partes = [];
+    for (let i = 0; i < items.length; i++) {
+      partes.push(await renderOne(items[i], items[i].token, i + 1, items.length));
+    }
+    out.innerHTML = (items.length > 1
+        ? `<div class="tip" style="margin:0 0 4px">Tenés <b>${items.length} entradas</b>. Cada código es
+             distinto y se escanea una sola vez — dale uno a cada persona.</div>` : '')
+      + partes.join('')
+      + `${e.reglas ? `<div class="rules"><h3>Antes de venir</h3><p>${esc(e.reglas)}</p></div>` : ''}
+         <div class="tip">Mostrá cada código en la puerta. Si reenviás uno, el primero
+           que llegue entra y el otro se queda afuera.</div>`;
+    pintarQrs();
+  } catch (err) {
+    fail('No se pudieron cargar las entradas. Revisá tu conexión.');
+  }
+}
+
+function pintarQrs() {
+  document.querySelectorAll('img[data-qr]').forEach(img => {
+    img.src = qrDataUrl(img.getAttribute('data-qr'));
+  });
+}
 
 /* Descarga: rehace la entrada en un canvas para que quede como imagen
    guardable en la galería, sin depender de librerías externas. */
@@ -264,16 +304,6 @@ window.guardar = async function () {
   } catch (err) { alert('No se pudo generar la imagen. Tomá una captura de pantalla.'); }
 };
 
-window.brillo = function () {
-  document.body.style.background = '#fff';
-  document.querySelector('.wrap').style.filter = 'invert(1)';
-  document.querySelector('.qrbox').style.filter = 'invert(1)';
-  setTimeout(() => {
-    document.body.style.background = '';
-    document.querySelector('.wrap').style.filter = '';
-    document.querySelector('.qrbox').style.filter = '';
-  }, 20000);
-};
 </script>
 </body>
 </html>

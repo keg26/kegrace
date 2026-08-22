@@ -1386,13 +1386,11 @@ function ambassadorSellForm(cfg) {
         <option value="" selected disabled>Selecciona un tipo…</option>
         ${cfg.ticketTypes.map(t => `<option value="${t.id}" data-price="${t.price}" data-name="${esc(t.name)}">${esc(t.name)} - ${fmtMoney(t.price)}</option>`).join('')}
       </select>
-      <label>Método de pago *</label>
-      <select id="fPayment">
-        <option value="" selected disabled>Selecciona un método…</option>
-        <option value="efectivo">Efectivo</option>
-        <option value="transferencia">Transferencia</option>
-        <option value="mixto">Mixto</option>
+      <label>Cantidad de entradas *</label>
+      <select id="fQty">
+        ${[1,2,3,4,5].map(n => `<option value="${n}">${n} entrada${n>1?'s':''}</option>`).join('')}
       </select>
+      <div class="info-note">Todas se mandan al mismo teléfono, cada una con su propio código.</div>
       <div style="background:var(--panel-2); border:1px solid var(--line); padding:12px; border-radius:3px; margin-bottom:10px;">
         <div style="display:flex; justify-content:space-between; font-size:12px;">
           <span style="color:var(--muted); text-transform:uppercase; letter-spacing:.08em;">Total a pagar</span>
@@ -1405,20 +1403,21 @@ function ambassadorSellForm(cfg) {
 }
 function setupSellForm(cfg) {
   const sel = document.getElementById('fType');
-  const pay = document.getElementById('fPayment');
+  const qty = document.getElementById('fQty');
   const updateTotal = () => {
     const opt = sel.options[sel.selectedIndex];
+    const n = Number(qty.value || 1);
     const hasPrice = opt && opt.dataset.price !== undefined;
-    document.getElementById('fTotal').textContent = hasPrice ? fmtMoney(Number(opt.dataset.price)) : '—';
+    document.getElementById('fTotal').textContent =
+      hasPrice ? fmtMoney(Number(opt.dataset.price) * n) + (n > 1 ? ` (${n} × ${fmtMoney(Number(opt.dataset.price))})` : '') : '—';
   };
   sel.addEventListener('change', () => { remember('lastType', sel.value); updateTotal(); });
-  pay.addEventListener('change', () => remember('lastPay', pay.value));
+  qty.addEventListener('change', updateTotal);
 
   /* Vender 30 Early Bird seguidos no deberia obligar a elegir "Early Bird"
      30 veces. Se recuerda lo ultimo usado en ESTE dispositivo. */
-  const lt = recall('lastType'), lp = recall('lastPay');
+  const lt = recall('lastType');
   if (lt && [...sel.options].some(o => o.value === lt)) sel.value = lt;
-  if (lp && [...pay.options].some(o => o.value === lp)) pay.value = lp;
   updateTotal();
   const b = document.getElementById('fBuyer'); if (b) b.focus();
 }
@@ -1581,44 +1580,44 @@ async function submitSale() {
   const phone = document.getElementById('fPhone').value.trim();
   const sel = document.getElementById('fType');
   const typeId = sel.value;
-  const payment = document.getElementById('fPayment').value;
+  const qty = Math.max(1, Math.min(5, Number(document.getElementById('fQty').value || 1)));
   if (!buyerName) return toast('Ingresa nombre del comprador');
   if (!dui) return toast('Ingresa el DUI del comprador');
   if (!waNumber(phone)) return toast('Ingresa un teléfono válido — es a donde se manda la entrada');
   if (!typeId) return toast('Selecciona el tipo de entrada');
   const tt = cfg.ticketTypes.find(t => t.id === typeId);
   if (!tt) return toast('Tipo inválido');
-  if (!payment) return toast('Selecciona el método de pago');
 
   btn.disabled = true; btn.textContent = 'Registrando…';
   try {
-    const idBoleto = await generateUniqueTicketId();
     const ambs = await getAmbassadors();
     const me = ambs.find(a => a.id === state.userId);
+    const grupoId = generateTicketToken(14);
 
-    const sale = {
-      idBoleto,
-      token: generateTicketToken(),
-      nombreComprador: buyerName,
-      dui,
-      telefono: phone,
-      correo: '',
-      embajador: me ? me.name : state.userName,
-      metodoPago: payment,
-      tipoEntrada: tt.name,
-      precio: tt.price,
-      fechaVenta: serverTimestamp(),
-      ingresado: false,
-      ambassadorId: state.userId,
-      ticketTypeId: tt.id
-    };
-    /* CUPO ATOMICO.
-       Antes se contaba y despues se creaba: entre esas dos operaciones pasa
-       medio segundo, y con varios embajadores vendiendo a la vez dos podian
-       pasar el chequeo con un solo cupo libre. Ahora el contador y la venta
-       se escriben DENTRO de la misma transaccion: Firestore garantiza que
-       si dos intentan a la vez, uno de los dos se reintenta y ve el numero
-       ya actualizado. Es imposible pasarse del cupo. */
+    /* Una compra de N entradas crea N ventas independientes: cada una con su
+       propio codigo y su propio token, porque cada una se escanea por separado
+       en la puerta. Quedan unidas por grupoId para poder mandarlas juntas. */
+    const sales = [];
+    for (let i = 0; i < qty; i++) {
+      sales.push({
+        idBoleto: await generateUniqueTicketId(),
+        token: generateTicketToken(),
+        nombreComprador: buyerName,
+        dui, telefono: phone, correo: '',
+        embajador: me ? me.name : state.userName,
+        metodoPago: 'transferencia',
+        tipoEntrada: tt.name,
+        precio: tt.price,
+        fechaVenta: serverTimestamp(),
+        ingresado: false,
+        ambassadorId: state.userId,
+        ticketTypeId: tt.id,
+        grupoId, indice: i + 1, totalGrupo: qty
+      });
+    }
+
+    /* CUPO ATOMICO para las N entradas a la vez: o entran todas o ninguna.
+       Reservar de a una podria dejar a alguien con 3 de 5 pagadas. */
     const counterRef = doc(db, 'counters', 'tickets');
     const aforoTotal = Number(cfg.aforoTotal || 1000);
     try {
@@ -1628,32 +1627,40 @@ async function submitSale() {
         const counts = Object.assign({}, data.counts || {});
         const usado = Number(counts[tt.id] || 0);
         const total = Number(data.total || 0);
-        if (usado >= tt.capacity) throw new Error('AGOTADO');
-        if (total >= aforoTotal) throw new Error('AFORO');
-        counts[tt.id] = usado + 1;
-        tx.set(counterRef, { counts, total: total + 1 }, { merge: true });
-        tx.set(doc(db, 'ventas', idBoleto), sale);
+        if (usado + qty > tt.capacity) throw new Error('AGOTADO:' + Math.max(0, tt.capacity - usado));
+        if (total + qty > aforoTotal) throw new Error('AFORO:' + Math.max(0, aforoTotal - total));
+        counts[tt.id] = usado + qty;
+        tx.set(counterRef, { counts, total: total + qty }, { merge: true });
+        sales.forEach(s => tx.set(doc(db, 'ventas', s.idBoleto), s));
       });
     } catch (te) {
-      if (te.message === 'AGOTADO') return toast(`${tt.name} está agotado`);
-      if (te.message === 'AFORO') return toast(`Aforo completo (${aforoTotal} personas)`);
+      const m = String(te.message || '');
+      if (m.startsWith('AGOTADO')) return toast(`Solo quedan ${m.split(':')[1]} de ${tt.name}`);
+      if (m.startsWith('AFORO')) return toast(`Solo quedan ${m.split(':')[1]} lugares en total`);
       throw te;
     }
 
-    /* Copia PUBLICA con lo minimo para mostrar la entrada: nombre, tipo y
-       codigo. Nada de DUI, telefono ni precio. Vive en su propia coleccion
-       para que t.html la lea sin pedir contrasena, y sin abrir /ventas. */
-    const e = cfg.eventInfo || {};
-    await setDoc(doc(db, 'tickets_public', sale.token), {
-      token: sale.token, idBoleto, nombre: buyerName, tipo: tt.name, anulado: false,
-      evento: eventoPublico(cfg),
-      plantilla: (cfg.template && cfg.template.url) || null,
-      stamp: cfg.stamp || null
+    const evento = eventoPublico(cfg);
+    const plantilla = (cfg.template && cfg.template.url) || null;
+    const stamp = cfg.stamp || null;
+    const batch = writeBatch(db);
+    sales.forEach(s => {
+      batch.set(doc(db, 'tickets_public', s.token), {
+        token: s.token, idBoleto: s.idBoleto, nombre: buyerName, tipo: tt.name,
+        anulado: false, indice: s.indice, totalGrupo: qty, evento, plantilla, stamp
+      });
     });
+    /* Indice del grupo: un solo documento que t.html lee para mostrar
+       las N entradas en una sola pagina, sin necesidad de consultas. */
+    batch.set(doc(db, 'groups_public', grupoId), {
+      tokens: sales.map(s => s.token), nombre: buyerName, tipo: tt.name, total: qty
+    });
+    await batch.commit();
 
-    toast('Venta registrada');
+    toast(qty > 1 ? `${qty} entradas registradas` : 'Venta registrada');
     resetSellForm();
-    viewTicket(idBoleto);
+    viewGroup(grupoId, sales.map(s => s.idBoleto));
+
   } catch (e) {
     toast('Error: ' + (e.message || e));
   } finally {
@@ -1661,7 +1668,6 @@ async function submitSale() {
   }
 }
 
-/* ================== TICKET VIEW (canvas + descarga + whatsapp) ================== */
 /* Caché de assets (PNG/PDF) por boleto, generados EN CUANTO se abre el modal,
    no cuando el usuario toca "WhatsApp". Esto es clave: navigator.share() exige
    ejecutarse casi sincrónicamente dentro del gesto del usuario (el tap), y generar
@@ -1685,6 +1691,127 @@ async function prepareTicketAssets(idBoleto, canvas, sale, cfg) {
   };
   ticketAssetCache.set(idBoleto, assets);
   return assets;
+}
+
+/* Vista de compra: una o varias entradas, con el enlace unico para WhatsApp
+   y el PDF de N paginas (una por entrada, cada una con su propio QR). */
+async function viewGroup(grupoId, idBoletos) {
+  const cfg = await getConfig();
+  const snaps = await Promise.all(idBoletos.map(id => getDoc(doc(db, 'ventas', id))));
+  const sales = snaps.filter(s => s.exists()).map(s => s.data());
+  if (!sales.length) return toast('No se encontraron las entradas');
+  const n = sales.length;
+  const s0 = sales[0];
+  openModal(`
+    <h2>${n > 1 ? n + ' entradas' : 'Entrada'} de ${esc(s0.nombreComprador)}</h2>
+    <div class="info-note">${esc(s0.tipoEntrada)} · ${fmtMoney(s0.precio * n)} · ${esc(s0.telefono)}</div>
+    <div style="margin:12px 0; max-height:180px; overflow-y:auto;">
+      ${sales.map(s => `<div class="list-item"><div class="list-item-main">
+        <div class="list-item-title">${esc(s.idBoleto)}</div>
+        <div class="list-item-sub">Entrada ${s.indice || 1} de ${n}</div></div></div>`).join('')}
+    </div>
+    <button class="success" onclick="sendGroupWhatsApp('${grupoId}','${idBoletos.join(',')}')">
+      Enviar por WhatsApp</button>
+    <button class="secondary" id="pdfBtn" onclick="downloadGroupPDF('${idBoletos.join(',')}')">
+      Descargar PDF (${n} página${n > 1 ? 's' : ''})</button>
+    <button class="secondary" onclick="closeModal()">Cerrar</button>
+  `);
+}
+
+function groupUrl(grupoId) {
+  return location.origin + location.pathname.replace(/[^/]*$/, '') + 't.html?g=' + encodeURIComponent(grupoId);
+}
+
+async function sendGroupWhatsApp(grupoId, ids) {
+  const cfg = await getConfig();
+  const idList = ids.split(',');
+  const s = (await getDoc(doc(db, 'ventas', idList[0]))).data();
+  const e = cfg.eventInfo || {};
+  const n = idList.length;
+  const msg = `¡Listo ${s.nombreComprador}! 🎃\n\n`
+    + `${n > 1 ? `Tus *${n} entradas* están` : 'Tu entrada está'} confirmada${n > 1 ? 's' : ''} para *${e.name || 'KEG RACE'}*.\n\n`
+    + `📅 ${e.date || ''}  ${e.time || ''}\n📍 ${e.venue || ''}\n🎟️ ${s.tipoEntrada}\n\n`
+    + `Abrí este enlace para ver ${n > 1 ? 'los códigos QR' : 'tu código QR'}:\n${groupUrl(grupoId)}\n\n`
+    + (n > 1 ? `Son ${n} códigos distintos, uno por persona. Cada uno se escanea una sola vez.`
+             : `Se escanea una sola vez en la puerta.`);
+  window.open('https://wa.me/' + waNumber(s.telefono) + '?text=' + encodeURIComponent(msg), '_blank');
+  idList.forEach(id => markSent(id));
+}
+
+/* PDF de una pagina por entrada. Cada pagina lleva SU propio QR: son
+   codigos distintos, no la misma entrada repetida. */
+async function downloadGroupPDF(ids) {
+  const btn = document.getElementById('pdfBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generando PDF…'; }
+  try {
+    if (!window.jspdf) return toast('No se pudo cargar el generador de PDF. Revisá tu conexión.');
+    const cfg = await getConfig();
+    const e = cfg.eventInfo || {};
+    const idList = ids.split(',');
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+    const W = pdf.internal.pageSize.getWidth();
+    const tplUrl = (cfg.template && cfg.template.url) || null;
+    let tpl = null;
+    if (tplUrl) {
+      tpl = await loadImageSafe(tplUrl);
+    }
+
+    for (let i = 0; i < idList.length; i++) {
+      if (i > 0) pdf.addPage();
+      const s = (await getDoc(doc(db, 'ventas', idList[i]))).data();
+      const qr = await generateQrCanvas(s.token || s.idBoleto, 600);
+
+      if (tpl) {
+        const iw = W - 80, ih = iw * tpl.naturalHeight / tpl.naturalWidth;
+        pdf.addImage(tpl, 'JPEG', 40, 40, iw, ih);
+        const st = cfg.stamp || {};
+        const qs = iw * (st.qrSizePct || 26) / 100;
+        const qx = 40 + iw * (st.qrXPct || 66) / 100;
+        const qy = 40 + ih * (st.qrYPct || 60) / 100;
+        pdf.setFillColor(255, 255, 255);
+        pdf.rect(qx - 6, qy - 6, qs + 12, qs + 12, 'F');
+        pdf.addImage(qr.toDataURL('image/png'), 'PNG', qx, qy, qs, qs);
+        pdf.setTextColor(17, 17, 17);
+        pdf.setFontSize(11);
+        pdf.text(`${s.idBoleto}  ·  ${s.nombreComprador}`, 40 + iw * (st.textXPct || 66) / 100,
+                 40 + ih * (st.textYPct || 88) / 100);
+      } else {
+        pdf.setFillColor(10, 10, 10); pdf.rect(0, 0, W, pdf.internal.pageSize.getHeight(), 'F');
+        pdf.setTextColor(230, 64, 43); pdf.setFontSize(26);
+        pdf.text('KEG RACE', 50, 80);
+        pdf.setTextColor(245, 245, 245); pdf.setFontSize(34);
+        pdf.text(String(e.name || 'KEG RACE').toUpperCase().slice(0, 22), 50, 130);
+        pdf.setFontSize(13); pdf.setTextColor(160, 160, 160);
+        pdf.text(`${e.date || ''}   ${e.time || ''}`, 50, 165);
+        pdf.text(String(e.venue || ''), 50, 188);
+        pdf.setFillColor(255, 255, 255);
+        pdf.rect(W / 2 - 160, 250, 320, 320, 'F');
+        pdf.addImage(qr.toDataURL('image/png'), 'PNG', W / 2 - 145, 265, 290, 290);
+        pdf.setTextColor(245, 245, 245); pdf.setFontSize(22);
+        pdf.text(s.idBoleto, W / 2, 615, { align: 'center' });
+        pdf.setFontSize(26);
+        pdf.text(String(s.nombreComprador).toUpperCase().slice(0, 26), W / 2, 655, { align: 'center' });
+        pdf.setFontSize(12); pdf.setTextColor(150, 150, 150);
+        pdf.text(`${s.tipoEntrada}  ·  Entrada ${s.indice || 1} de ${s.totalGrupo || idList.length}`,
+                 W / 2, 690, { align: 'center' });
+      }
+    }
+    pdf.save(`entradas-${idList[0]}.pdf`);
+    idList.forEach(id => markSent(id));
+  } catch (err) {
+    toast('No se pudo generar el PDF: ' + (err.message || err));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Descargar PDF'; }
+  }
+}
+
+function loadImageSafe(url) {
+  return new Promise(res => {
+    const i = new Image(); i.crossOrigin = 'anonymous';
+    i.onload = () => res(i); i.onerror = () => res(null);
+    i.src = url;
+  });
 }
 
 async function viewTicket(idBoleto) {
@@ -2076,7 +2203,7 @@ Object.assign(window, {
   editTicketType, removeTicketType, saveTicketTypeModal,
   saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll, confirmWipeSales,
   onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
-  closeModal, setAmbassadorTab, submitSale,
+  closeModal, setAmbassadorTab, submitSale, viewGroup, sendGroupWhatsApp, downloadGroupPDF,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
   backfillTokens, createDoorAccount, saveAforo, recalcCounters, resyncEventInfo
 });

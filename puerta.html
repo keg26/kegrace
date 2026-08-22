@@ -482,10 +482,50 @@ async function syncUp(silent=false){
   }
 }
 
+/* ESCUCHA EN VIVO.
+   Mientras hay senal, la puerta queda suscrita a la coleccion de ventas:
+   cada venta nueva o cada cambio aparece solo, sin tocar ningun boton, y
+   se guarda en el telefono. Si la senal se corta, la suscripcion muere
+   pero la copia local queda intacta y el escaneo sigue funcionando.
+   Al volver la senal se resuscribe y se pone al dia. */
+let _unsub=null;
+async function startLiveSync(){
+  if(!online() || _unsub) return;
+  try{
+    const {f,db}=await fb();
+    _unsub = f.onSnapshot(f.collection(db,'ventas'), snap=>{
+      const local=new Map(S.all.map(v=>[v.idBoleto,v]));
+      const pendientes=new Set(S.queue.map(q=>q.idBoleto));
+      const rows=[];
+      snap.forEach(d=>{
+        const s=d.data(); const prev=local.get(d.id);
+        /* Si este equipo tiene un ingreso sin subir, su version LOCAL manda:
+           no dejamos que el servidor "desmarque" a alguien que ya entro. */
+        const localManda = prev && pendientes.has(d.id);
+        rows.push({
+          idBoleto:d.id, token:s.token||d.id,
+          nombreComprador:s.nombreComprador||'Sin nombre',
+          dui:s.dui||'', telefono:s.telefono||'',
+          tipoEntrada:s.tipoEntrada||'', precio:s.precio||0,
+          embajador:s.embajador||'',
+          ingresado: localManda ? prev.ingresado : !!s.ingresado,
+          dentro:    localManda ? prev.dentro    : !!s.dentro,
+          fechaIngreso: localManda ? prev.fechaIngreso
+            : (s.fechaIngreso&&s.fechaIngreso.toMillis?s.fechaIngreso.toMillis():null),
+          ingresoDevice: localManda ? prev.ingresoDevice : (s.ingresoDevice||'')
+        });
+      });
+      S.all=rows; reindex();
+      S.lastSync=Date.now(); saveMeta();
+      idbBulk('manifest',rows).catch(()=>{});
+      refreshStrip();
+    }, err=>{ _unsub=null; });
+  }catch(e){ _unsub=null; }
+}
+function stopLiveSync(){ if(_unsub){ try{_unsub();}catch(e){} _unsub=null; } }
+
 async function downloadManifest(){
   if(!online()){ toast('Necesitás señal para descargar la lista'); return false; }
-  const btn=document.getElementById('btnManifest');
-  if(btn){btn.disabled=true;btn.textContent='Descargando…';}
   try{
     const {f,db}=await fb();
     const snap=await f.getDocs(f.collection(db,'ventas'));
@@ -511,12 +551,10 @@ async function downloadManifest(){
     await idbBulk('manifest',rows);
     S.all=rows; reindex();
     S.lastSync=Date.now(); await saveMeta();
-    toast(`Lista lista: ${rows.length} entradas guardadas en el teléfono`);
     render();
     return true;
   }catch(e){
-    toast('Error al descargar: '+(e.message||e));
-    if(btn){btn.disabled=false;btn.textContent='Descargar lista de entradas';}
+    toast('No se pudo cargar la lista: '+(e.message||e));
     return false;
   }
 }
@@ -653,7 +691,6 @@ function counters(){
 function render(){
   const app=document.getElementById('app');
   if(!S.authed) return renderLogin(app);
-  if(!S.all.length) return renderSetup(app);
   return renderDoor(app);
 }
 
@@ -709,6 +746,7 @@ async function doLogin(){
     const cred=await au.signInWithEmailAndPassword(auth,toEmail(u),p);
     S.savedEmail=cred.user.email; await saveMeta();
     S.authed=true; render();
+    if(!S.all.length) downloadManifest();
   }catch(e){
     const map={
       'auth/invalid-credential':'Usuario o contraseña incorrectos.',
@@ -723,24 +761,7 @@ async function doLogin(){
   }
 }
 
-/* --- Preparación (descargar manifiesto) --- */
-function renderSetup(app){
-  app.innerHTML=`${strip()}
-  <div class="pad">
-    <div class="eyebrow">Paso 1 de 1</div>
-    <h1 style="font-size:32px;margin:2px 0 16px;">Preparar la puerta</h1>
-    <div class="warnbox">Hacé esto <b>con wifi, antes de salir de tu casa</b>. Una vez descargada la lista,
-      el scanner funciona sin señal toda la noche.</div>
-    <div class="card">
-      <div class="note" style="margin-bottom:14px;">Se guardan las entradas vendidas dentro del teléfono
-        (unos 150 KB). Después de esto no se consume datos para validar.</div>
-      <button class="btn" id="btnManifest" onclick="downloadManifest()">Descargar lista de entradas</button>
-      <button class="btn ghost" onclick="nameDevice()">Nombrar este equipo (${esc(S.deviceName||S.device)})</button>
-    </div>
-    <div class="note">Poné un nombre a cada teléfono —"Puerta 1", "Puerta VIP"— para saber después
-      quién registró cada ingreso.</div>
-  </div>`;
-}
+/* --- Nombre del equipo (se pide una sola vez) --- */
 async function nameDevice(){
   const n=prompt('Nombre de este equipo (ej: Puerta 1):',S.deviceName||'');
   if(n===null) return;
@@ -751,7 +772,7 @@ async function nameDevice(){
 
 /* --- Pantalla principal de puerta --- */
 function renderDoor(app){
-  const stale=S.lastSync?Math.round((Date.now()-S.lastSync)/60000):null;
+  const listo = S.all.length > 0;
   app.innerHTML=`${strip()}
   <div class="pad">
     <div id="camwrap" class="cam">
@@ -762,6 +783,10 @@ function renderDoor(app){
         <button onclick="openSheet()">Buscar por nombre</button>
       </div>
     </div>
+
+    ${listo ? '' : `<div class="warnbox" style="margin-top:12px;">
+      Cargando la lista de entradas… Si no aparece en unos segundos,
+      revisá que tengas señal.</div>`}
 
     <div class="card" style="margin-top:12px;">
       <div id="counters">${counters()}</div>
@@ -778,21 +803,20 @@ function renderDoor(app){
       </div>
     </div>
 
-    <div class="row" style="margin-bottom:12px;">
-      <button class="btn sec" onclick="syncUp()">Sincronizar${S.queue.length?' ('+S.queue.length+')':''}</button>
-      <button class="btn sec" onclick="downloadManifest()">Actualizar lista</button>
-    </div>
-
     <div class="note">
-      Lista actualizada ${stale===null?'nunca':(stale<1?'hace instantes':'hace '+stale+' min')}.
-      Equipo: <b>${esc(S.deviceName||S.device)}</b>.
+      Equipo: <b>${esc(S.deviceName||S.device)}</b> ·
+      <a href="#" onclick="nameDevice();return false;" style="color:var(--pass)">cambiar</a><br>
+      La lista se actualiza sola con cada venta nueva.
       ${S.queue.length?`<br><b style="color:var(--warn)">${S.queue.length} ingresos esperando señal.</b>
-        No cierres esta pestaña hasta sincronizar.`:''}
+        Se suben solos cuando vuelva.`:''}
     </div>
     <button class="btn ghost" onclick="logout()">Salir</button>
   </div>`;
   startCam();
+  startLiveSync();
+  if(!listo && online()) downloadManifest();
 }
+
 async function toggleReentry(){
   S.reentry=!S.reentry; await saveMeta();
   toast(S.reentry?'Reingreso activado':'Reingreso desactivado');
@@ -806,12 +830,14 @@ async function logout(){
 }
 
 /* ---------- ARRANQUE ---------- */
-window.addEventListener('online', ()=>{refreshStrip(); syncUp(true);});
-window.addEventListener('offline', ()=>{refreshStrip(); toast('Sin señal. La puerta sigue funcionando.');});
+window.addEventListener('online', ()=>{refreshStrip(); syncUp(true); startLiveSync();});
+window.addEventListener('offline', ()=>{stopLiveSync(); refreshStrip();
+  toast('Sin señal. La puerta sigue funcionando con la lista guardada.');});
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible' && S.authed && S.all.length){
+  if(document.visibilityState==='visible' && S.authed){
     if(!S.scanning) startCam();
-  } else if(document.visibilityState==='hidden'){ stopCam(); }
+    startLiveSync();
+  } else if(document.visibilityState==='hidden'){ stopCam(); stopLiveSync(); }
 });
 window.addEventListener('beforeunload',e=>{
   if(S.queue.length){ e.preventDefault(); e.returnValue=''; }
