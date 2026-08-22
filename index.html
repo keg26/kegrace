@@ -191,6 +191,8 @@
 ===================================================================== */
 
 const DEFAULT_CONFIG = {
+  aforoTotal: 1000,
+  maxPorCompra: 10,
   eventInfo: {
     name: 'KEG RACE 2026',
     date: '31 de Octubre, 2026',
@@ -791,7 +793,11 @@ function adminTickets(cfg, ventas) {
       </div>
       <label>Aforo máximo del local</label>
       <input id="cfgAforo" type="number" value="${aforo}">
-      <button class="secondary" onclick="saveAforo()">Guardar aforo</button>
+      <label>Máximo de entradas por compra</label>
+      <input id="cfgMaxCompra" type="number" min="1" max="50" value="${Number(cfg.maxPorCompra || 10)}">
+      <div class="info-note">Es cuántas entradas puede llevarse una misma persona en un solo registro.
+        Todas van al mismo teléfono, cada una con su código.</div>
+      <button class="secondary" onclick="saveAforo()">Guardar</button>
       <div class="divider"></div>
       <div class="info-note">Si los números de arriba no coinciden con la realidad —por ejemplo
         después de borrar ventas de prueba— recalculá los contadores.</div>
@@ -1388,7 +1394,8 @@ function ambassadorSellForm(cfg) {
       </select>
       <label>Cantidad de entradas *</label>
       <select id="fQty">
-        ${[1,2,3,4,5].map(n => `<option value="${n}">${n} entrada${n>1?'s':''}</option>`).join('')}
+        ${Array.from({length: Number(cfg.maxPorCompra || 10)}, (_, i) => i + 1)
+            .map(n => `<option value="${n}">${n} entrada${n>1?'s':''}</option>`).join('')}
       </select>
       <div class="info-note">Todas se mandan al mismo teléfono, cada una con su propio código.</div>
       <div style="background:var(--panel-2); border:1px solid var(--line); padding:12px; border-radius:3px; margin-bottom:10px;">
@@ -1538,9 +1545,11 @@ async function resyncEventInfo() {
 
 async function saveAforo() {
   const n = Number(document.getElementById('cfgAforo').value);
-  if (!n || n < 1) return toast('Poné un número válido');
-  await saveConfig({ aforoTotal: n });
-  toast('Aforo guardado: ' + n); render();
+  const m = Number(document.getElementById('cfgMaxCompra').value);
+  if (!n || n < 1) return toast('Poné un aforo válido');
+  if (!m || m < 1 || m > 50) return toast('El máximo por compra debe estar entre 1 y 50');
+  await saveConfig({ aforoTotal: n, maxPorCompra: m });
+  toast('Guardado'); render();
 }
 
 /* Reconstruye el contador contando las ventas reales. Necesario despues de
@@ -1580,7 +1589,8 @@ async function submitSale() {
   const phone = document.getElementById('fPhone').value.trim();
   const sel = document.getElementById('fType');
   const typeId = sel.value;
-  const qty = Math.max(1, Math.min(5, Number(document.getElementById('fQty').value || 1)));
+  const maxCompra = Number(cfg.maxPorCompra || 10);
+  const qty = Math.max(1, Math.min(maxCompra, Number(document.getElementById('fQty').value || 1)));
   if (!buyerName) return toast('Ingresa nombre del comprador');
   if (!dui) return toast('Ingresa el DUI del comprador');
   if (!waNumber(phone)) return toast('Ingresa un teléfono válido — es a donde se manda la entrada');
