@@ -1710,12 +1710,21 @@ async function viewGroup(grupoId, idBoletos) {
         <div class="list-item-title">${esc(s.idBoleto)}</div>
         <div class="list-item-sub">Entrada ${s.indice || 1} de ${n}</div></div></div>`).join('')}
     </div>
-    <button class="success" onclick="sendGroupWhatsApp('${grupoId}','${idBoletos.join(',')}')">
-      Enviar por WhatsApp</button>
+    <button class="success" id="waPdfBtn" disabled
+      onclick="shareGroupPDF('${grupoId}','${idBoletos.join(',')}')">Armando el PDF…</button>
+    <div class="info-note">Adjunta el PDF con ${n > 1 ? 'las ' + n + ' entradas' : 'la entrada'} y el mensaje.
+      WhatsApp te va a pedir que elijas el contacto: no permite adjuntar archivos abriendo el chat directo.</div>
+    <div class="divider"></div>
+    <button class="secondary" onclick="sendGroupWhatsApp('${grupoId}','${idBoletos.join(',')}')">
+      Solo mensaje, sin adjunto (más rápido)</button>
+    <div class="info-note">Abre directo el chat de ${esc(s0.telefono)} con el mensaje y el enlace
+      ya escritos. Solo tocás enviar.</div>
+    <div class="divider"></div>
     <button class="secondary" id="pdfBtn" onclick="downloadGroupPDF('${idBoletos.join(',')}')">
       Descargar PDF (${n} página${n > 1 ? 's' : ''})</button>
     <button class="secondary" onclick="closeModal()">Cerrar</button>
   `);
+  prepareGroupPdf(idBoletos, sales, cfg);
 }
 
 function groupUrl(grupoId) {
@@ -1740,14 +1749,95 @@ async function sendGroupWhatsApp(grupoId, ids) {
 
 /* PDF de una pagina por entrada. Cada pagina lleva SU propio QR: son
    codigos distintos, no la misma entrada repetida. */
+const groupPdfCache = new Map();
+
+/* El PDF se arma APENAS se abre la venta, en segundo plano. Asi, cuando
+   tocas el boton, el archivo ya existe y navigator.share() se dispara
+   dentro del gesto del usuario — que es lo unico que iOS acepta. Si lo
+   generaramos al tocar, iPhone bloquea el compartir por llegar tarde. */
+async function prepareGroupPdf(ids, sales, cfg) {
+  try {
+    const blob = await buildGroupPDF(ids, cfg);
+    const n = ids.length;
+    const file = new File([blob], `entradas-${sales[0].nombreComprador.split(' ')[0]}-${n}.pdf`,
+                          { type: 'application/pdf' });
+    groupPdfCache.set(ids.join(','), { blob, file });
+    const b = document.getElementById('waPdfBtn');
+    if (b) { b.disabled = false; b.textContent = `Enviar por WhatsApp con PDF (${n})`; }
+    const d = document.getElementById('pdfBtn');
+    if (d) d.disabled = false;
+  } catch (e) {
+    const b = document.getElementById('waPdfBtn');
+    if (b) { b.disabled = true; b.textContent = 'No se pudo armar el PDF'; }
+  }
+}
+
+function groupMessage(sale, cfg, n, grupoId) {
+  const e = cfg.eventInfo || {};
+  return `¡Listo ${sale.nombreComprador}! 🎃\n\n`
+    + `${n > 1 ? `Tus *${n} entradas* están confirmadas` : 'Tu entrada está confirmada'} para *${e.name || 'KEG RACE'}*.\n\n`
+    + `📅 ${e.date || ''}  ${e.time || ''}\n📍 ${e.venue || ''}\n🎟️ ${sale.tipoEntrada}\n\n`
+    + (grupoId ? `También podés verlas acá:\n${groupUrl(grupoId)}\n\n` : '')
+    + (n > 1 ? `Son ${n} códigos distintos, uno por persona. Cada uno se escanea una sola vez.`
+             : `Se escanea una sola vez en la puerta.`);
+}
+
+/* Ruta A: adjunta el PDF. Pasa por el selector de contactos de WhatsApp
+   porque wa.me no admite archivos — es limite de WhatsApp, no del codigo. */
+async function shareGroupPDF(grupoId, ids) {
+  const idList = ids.split(',');
+  const hit = groupPdfCache.get(ids);
+  if (!hit) return toast('El PDF todavía se está armando, esperá un segundo');
+  const cfg = await getConfig();
+  const sale = (await getDoc(doc(db, 'ventas', idList[0]))).data();
+  const msg = groupMessage(sale, cfg, idList.length, grupoId);
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [hit.file] })) {
+      await navigator.share({ files: [hit.file], text: msg, title: 'Entradas KEG RACE' });
+      idList.forEach(id => markSent(id));
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+  /* Sin compartir nativo (computadora): descarga el PDF y abre el chat. */
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(hit.blob); a.download = hit.file.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  window.open('https://wa.me/' + waNumber(sale.telefono) + '?text=' + encodeURIComponent(msg), '_blank');
+  idList.forEach(id => markSent(id));
+}
+
 async function downloadGroupPDF(ids) {
+  const idList0 = ids.split(',');
+  const hit = groupPdfCache.get(ids);
+  if (hit) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(hit.blob); a.download = hit.file.name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    idList0.forEach(id => markSent(id));
+    return;
+  }
   const btn = document.getElementById('pdfBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Generando PDF…'; }
   try {
-    if (!window.jspdf) return toast('No se pudo cargar el generador de PDF. Revisá tu conexión.');
     const cfg = await getConfig();
+    const blob = await buildGroupPDF(idList0, cfg);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `entradas-${idList0[0]}.pdf`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    idList0.forEach(id => markSent(id));
+  } catch (err) {
+    toast('No se pudo generar el PDF: ' + (err.message || err));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Descargar PDF'; }
+  }
+}
+
+async function buildGroupPDF(idList, cfg) {
+  {
+    if (!window.jspdf) throw new Error('No se pudo cargar el generador de PDF');
     const e = cfg.eventInfo || {};
-    const idList = ids.split(',');
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
     const W = pdf.internal.pageSize.getWidth();
@@ -1797,12 +1887,7 @@ async function downloadGroupPDF(ids) {
                  W / 2, 690, { align: 'center' });
       }
     }
-    pdf.save(`entradas-${idList[0]}.pdf`);
-    idList.forEach(id => markSent(id));
-  } catch (err) {
-    toast('No se pudo generar el PDF: ' + (err.message || err));
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Descargar PDF'; }
+    return pdf.output('blob');
   }
 }
 
@@ -2203,7 +2288,7 @@ Object.assign(window, {
   editTicketType, removeTicketType, saveTicketTypeModal,
   saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll, confirmWipeSales,
   onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
-  closeModal, setAmbassadorTab, submitSale, viewGroup, sendGroupWhatsApp, downloadGroupPDF,
+  closeModal, setAmbassadorTab, submitSale, viewGroup, sendGroupWhatsApp, downloadGroupPDF, shareGroupPDF,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
   backfillTokens, createDoorAccount, saveAforo, recalcCounters, resyncEventInfo
 });
