@@ -1723,12 +1723,8 @@ async function viewGroup(grupoId, idBoletos) {
     <button class="success" id="waPdfBtn" disabled
       onclick="shareGroupPDF('${grupoId}','${idBoletos.join(',')}')">Armando el PDF…</button>
     <div class="info-note">Adjunta el PDF con ${n > 1 ? 'las ' + n + ' entradas' : 'la entrada'} y el mensaje.
-      WhatsApp te va a pedir que elijas el contacto: no permite adjuntar archivos abriendo el chat directo.</div>
-    <div class="divider"></div>
-    <button class="secondary" onclick="sendGroupWhatsApp('${grupoId}','${idBoletos.join(',')}')">
-      Solo mensaje, sin adjunto (más rápido)</button>
-    <div class="info-note">Abre directo el chat de ${esc(s0.telefono)} con el mensaje y el enlace
-      ya escritos. Solo tocás enviar.</div>
+      WhatsApp te va a pedir que elijas el contacto — buscá <b>${esc(s0.telefono)}</b>.
+      No permite adjuntar archivos abriendo el chat directo.</div>
     <div class="divider"></div>
     <button class="secondary" id="pdfBtn" onclick="downloadGroupPDF('${idBoletos.join(',')}')">
       Descargar PDF (${n} página${n > 1 ? 's' : ''})</button>
@@ -1787,9 +1783,8 @@ function groupMessage(sale, cfg, n, grupoId) {
   return `¡Listo ${sale.nombreComprador}! 🎃\n\n`
     + `${n > 1 ? `Tus *${n} entradas* están confirmadas` : 'Tu entrada está confirmada'} para *${e.name || 'KEG RACE'}*.\n\n`
     + `📅 ${e.date || ''}  ${e.time || ''}\n📍 ${e.venue || ''}\n🎟️ ${sale.tipoEntrada}\n\n`
-    + (grupoId ? `También podés verlas acá:\n${groupUrl(grupoId)}\n\n` : '')
-    + (n > 1 ? `Son ${n} códigos distintos, uno por persona. Cada uno se escanea una sola vez.`
-             : `Se escanea una sola vez en la puerta.`);
+    + (n > 1 ? `Te adjunto el PDF con los ${n} códigos, uno por persona.\nCada uno se escanea una sola vez.`
+             : `Te adjunto tu código en PDF. Se escanea una sola vez en la puerta.`);
 }
 
 /* Ruta A: adjunta el PDF. Pasa por el selector de contactos de WhatsApp
