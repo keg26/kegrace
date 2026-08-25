@@ -345,7 +345,7 @@ function listenVentasByAmbassador(ambassadorId, cb) {
 /* ---------- STATE ---------- */
 const state = {
   role: null, userId: null, userName: null, scannerInstance: null,
-  adminTab: 'dashboard', ambassadorTab: 'sell', unsubs: []
+  adminTab: 'dashboard', ambassadorTab: 'sell', salesDay: '', unsubs: []
 };
 function clearUnsubs() { state.unsubs.forEach(u => { try { u(); } catch(e){} }); state.unsubs = []; }
 
@@ -508,7 +508,7 @@ async function renderAdmin(app) {
     // (eso multiplicaba lecturas innecesarias contra la cuota gratis de Firestore).
     let _cacheVentas = null, _cacheAmbs = null;
     const tryRender = () => { if (_cacheVentas && _cacheAmbs) content.innerHTML = adminDashboard(cfg, _cacheAmbs, _cacheVentas); };
-    const unsubV = listenVentas(ventas => { _cacheVentas = ventas; tryRender(); });
+    const unsubV = listenVentas(ventas => { _cacheVentas = ventas; tryRender(); autoBackup(ventas); });
     const unsubA = listenAmbassadors(ambs => { _cacheAmbs = ambs; tryRender(); });
     state.unsubs.push(unsubV, unsubA);
   } else if (state.adminTab === 'newsale') {
@@ -534,6 +534,7 @@ async function renderAdmin(app) {
     setupDesignTab(cfg);
   } else if (state.adminTab === 'settings') {
     content.innerHTML = adminSettings(cfg);
+    listBackups();
   }
 }
 function setAdminTab(t) { state.adminTab = t; render(); }
@@ -596,19 +597,66 @@ function adminDashboard(cfg, ambs, ventas) {
   `;
 }
 
+/* Devuelve AAAA-MM-DD en hora local. Con toISOString() las ventas de la
+   noche se irian al dia siguiente por el desfase UTC. */
+function diaDe(ts) {
+  const d = ts && ts.toDate ? ts.toDate() : (ts ? new Date(ts) : null);
+  if (!d || isNaN(d)) return '';
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function hoyStr() { return diaDe(new Date()); }
+
+function filtrarDia(d) {
+  state.salesDay = (state.salesDay === d) ? '' : d;
+  render();
+}
+
 function adminSales(cfg, ventas) {
   const typeMap = Object.fromEntries(cfg.ticketTypes.map(t => [t.id, t]));
+
+  /* Resumen por dia: cuantas entradas y cuanto dinero entro cada jornada. */
+  const porDia = {};
+  ventas.forEach(v => {
+    const d = diaDe(v.fechaVenta); if (!d) return;
+    if (!porDia[d]) porDia[d] = { n: 0, monto: 0 };
+    porDia[d].n++; porDia[d].monto += Number(v.precio || 0);
+  });
+  const dias = Object.keys(porDia).sort().reverse();
+
+  const filtro = state.salesDay || '';
+  const lista = filtro ? ventas.filter(v => diaDe(v.fechaVenta) === filtro) : ventas;
+  const montoLista = lista.reduce((a, v) => a + Number(v.precio || 0), 0);
+
   return `
     <div class="card">
+      <h3>Ventas por día</h3>
+      ${dias.length === 0 ? '<div class="empty">Todavía no hay ventas.</div>' :
+        `<div class="overflow-x"><table>
+          <thead><tr><th>Día</th><th>Entradas</th><th>Monto</th><th></th></tr></thead>
+          <tbody>${dias.map(d => `<tr${filtro === d ? ' style="background:rgba(230,64,43,.12)"' : ''}>
+            <td>${d === hoyStr() ? '<b>Hoy</b> · ' : ''}${d}</td>
+            <td><b>${porDia[d].n}</b></td>
+            <td>${fmtMoney(porDia[d].monto)}</td>
+            <td><button class="icon-btn secondary" onclick="filtrarDia('${d}')">
+              ${filtro === d ? 'Quitar' : 'Ver'}</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>`}
+      <div class="divider"></div>
+      <label>Ir a una fecha</label>
+      <input type="date" id="salesDayPick" value="${filtro}" onchange="filtrarDia(this.value)">
+      ${filtro ? `<button class="secondary" onclick="filtrarDia('')">Ver todas las ventas</button>` : ''}
+    </div>
+
+    <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-        <h3 style="margin:0">Todas las ventas (${ventas.length})</h3>
+        <h3 style="margin:0">${filtro ? 'Ventas del ' + filtro : 'Todas las ventas'} (${lista.length}) · ${fmtMoney(montoLista)}</h3>
         <button class="secondary" style="width:auto; padding:9px 16px; margin:0;" onclick="exportCSV()">Exportar CSV</button>
       </div>
-      ${ventas.length===0 ? '<div class="empty">Aún no hay ventas registradas.</div>' :
+      ${lista.length===0 ? '<div class="empty">No hay ventas en esta fecha.</div>' :
         `<div class="overflow-x"><table>
           <thead><tr><th>Fecha</th><th>Comprador</th><th>Tipo</th><th>Embajador</th><th>Precio</th><th>Pago</th><th>Estado</th><th>ID</th><th></th></tr></thead>
           <tbody>
-          ${ventas.map(v => `<tr>
+          ${lista.map(v => `<tr>
             <td>${fmtDate(v.fechaVenta)}</td>
             <td>${esc(v.nombreComprador)}<br><span style="color:var(--muted); font-size:11px">DUI: ${esc(v.dui||'—')}${v.telefono ? ' · '+esc(v.telefono) : ''}</span></td>
             <td><span class="badge red">${esc(v.tipoEntrada||'?')}</span></td>
@@ -674,7 +722,8 @@ function adminAmbassadors(ambs, ventas) {
           return `<div class="list-item">
             <div class="list-item-main">
               <div class="list-item-title">${esc(a.name)}</div>
-              <div class="list-item-sub">Usuario: <b>${esc(a.email||'—')}</b> · Comisión: ${fmtMoney(a.commissionPerTicket)}/entrada · Ventas: ${vs.length} · Total: ${fmtMoney(comm)}</div>
+              <div class="list-item-sub">Usuario: <b>${esc(a.email||'—')}</b> · Comisión: ${fmtMoney(a.commissionPerTicket)}/entrada · Total: ${fmtMoney(comm)}<br>
+                Cupo: <b style="color:${a.cupoMaximo && vs.length >= a.cupoMaximo ? 'var(--accent)' : 'inherit'}">${vs.length}${a.cupoMaximo ? ' / ' + a.cupoMaximo : ' (sin límite)'}</b></div>
             </div>
             <div class="list-item-actions">
               <button class="icon-btn secondary" onclick="editAmbassador('${a.id}')">Ed.</button>
@@ -708,6 +757,10 @@ async function editAmbassador(id) {
     `}
     <label>Comisión por entrada vendida ($)</label>
     <input id="mAmbComm" type="number" step="0.01" value="${a.commissionPerTicket}">
+    <label>Cupo máximo de entradas</label>
+    <input id="mAmbCupo" type="number" min="0" value="${a.cupoMaximo === undefined ? 10 : a.cupoMaximo}">
+    <div class="info-note">Cuántas entradas puede vender este embajador en total.
+      Poné <b>0</b> para sin límite — usalo en la cuenta que va a manejar el resto del tramo.</div>
     <div class="row" style="margin-top:14px;">
       <button class="secondary" onclick="closeModal()">Cancelar</button>
       <button id="mAmbSave" onclick="saveAmbassadorModal('${id||''}')">Guardar</button>
@@ -719,11 +772,12 @@ async function saveAmbassadorModal(id) {
   const btn  = document.getElementById('mAmbSave');
   const name = document.getElementById('mAmbName').value.trim();
   const comm = Number(document.getElementById('mAmbComm').value);
+  const cupo = Math.max(0, Number(document.getElementById('mAmbCupo').value || 0));
   if (!name) return toast('Escribí el nombre');
 
   // --- Editar: solo datos, sin tocar la cuenta ---
   if (id) {
-    await saveAmbassador(id, { name, commissionPerTicket: comm });
+    await saveAmbassador(id, { name, commissionPerTicket: comm, cupoMaximo: cupo });
     closeModal(); toast('Guardado'); render();
     return;
   }
@@ -749,7 +803,7 @@ async function saveAmbassadorModal(id) {
 
     const ref = await addDoc(collection(db, 'ambassadors'), {
       name, email: toEmail(user), uid,
-      commissionPerTicket: comm, createdAt: serverTimestamp()
+      commissionPerTicket: comm, cupoMaximo: cupo, createdAt: serverTimestamp()
     });
     ambId = ref.id;
 
@@ -881,6 +935,28 @@ function adminSettings(cfg) {
       <button class="secondary" onclick="resyncEventInfo()">Actualizar entradas ya emitidas</button>
     </div>
         <div class="card">
+      <h3>Mensaje de WhatsApp</h3>
+      <div class="info-note">Este es el texto que acompaña al PDF. Escribí lo que quieras y usá
+        estas etiquetas, que se reemplazan solas en cada venta:<br>
+        <code>{nombre}</code> <code>{evento}</code> <code>{fecha}</code> <code>{hora}</code>
+        <code>{lugar}</code> <code>{tipo}</code> <code>{cantidad}</code> <code>{cantidad_texto}</code>
+      </div>
+      <textarea id="cfgWaTpl" rows="10" style="width:100%; font-family:inherit; font-size:14px;
+        background:var(--surface2, #161616); color:inherit; border:1px solid var(--line);
+        border-radius:8px; padding:12px;">${esc(cfg.waTemplate || MENSAJE_DEFECTO)}</textarea>
+      <button onclick="saveWaTemplate()">Guardar mensaje</button>
+      <button class="secondary" onclick="previewWaTemplate()">Ver cómo queda</button>
+      <button class="secondary" onclick="resetWaTemplate()">Volver al mensaje original</button>
+    </div>
+    <div class="card">
+      <h3>Respaldos diarios</h3>
+      <div class="info-note">Se guarda una copia de todas las ventas cada día, automáticamente,
+        la primera vez que abrís el panel esa jornada. Descargalos como CSV cuando quieras.</div>
+      <div id="backupList"><div class="empty">Cargando…</div></div>
+      <div class="divider"></div>
+      <button class="secondary" onclick="forceBackup()">Respaldar ahora</button>
+    </div>
+    <div class="card">
       <h3>Cuentas y seguridad</h3>
       <div class="info-note">
         Ya no se usan PINs. Cada persona entra con su propio usuario y contraseña,
@@ -1358,6 +1434,19 @@ async function renderAmbassador(app) {
             </div>`).join('')}
           </div>`;
         })()}
+        ${(() => {
+          const cupo = Number((ambs.find(a => a.id === state.userId) || {}).cupoMaximo || 0);
+          if (!cupo) return '';
+          const rest = Math.max(0, cupo - ventas.length);
+          return `<div class="card" style="border-color:${rest === 0 ? 'var(--accent)' : 'var(--line)'}">
+            <h3>Tu cupo</h3>
+            <div class="grid-2">
+              <div class="stat"><div class="stat-value">${ventas.length}</div><div class="stat-label">Vendidas</div></div>
+              <div class="stat"><div class="stat-value" style="color:${rest === 0 ? 'var(--accent)' : 'inherit'}">${rest}</div><div class="stat-label">Te quedan</div></div>
+            </div>
+            ${rest === 0 ? '<div class="warn">Ya usaste todo tu cupo. Hablá con el administrador para que te lo amplíe.</div>' : ''}
+          </div>`;
+        })()}
         <div class="card">
           <h3>Mis ventas</h3>
           ${ventas.length===0 ? '<div class="empty">Aún no has vendido entradas.</div>' :
@@ -1383,10 +1472,10 @@ function ambassadorSellForm(cfg) {
     <div class="card">
       <label>Nombre del comprador *</label>
       <input id="fBuyer" placeholder="Nombre completo">
-      <label>DUI del comprador *</label>
-      <input id="fDui" placeholder="Ej: 04512345-6" inputmode="numeric">
-      <label>Teléfono * (a este número se le manda la entrada)</label>
-      <input id="fPhone" placeholder="Ej: 7777-7777" inputmode="tel">
+      <label>DUI del comprador * (9 dígitos)</label>
+      <input id="fDui" placeholder="04512345-6" inputmode="numeric" maxlength="10" autocomplete="off">
+      <label>Teléfono * (8 dígitos — a este número se manda la entrada)</label>
+      <input id="fPhone" placeholder="77777777" inputmode="numeric" maxlength="8" autocomplete="off">
       <label>Tipo de entrada *</label>
       <select id="fType">
         <option value="" selected disabled>Selecciona un tipo…</option>
@@ -1426,10 +1515,39 @@ function setupSellForm(cfg) {
   const lt = recall('lastType');
   if (lt && [...sel.options].some(o => o.value === lt)) sel.value = lt;
   updateTotal();
+  const dui = document.getElementById('fDui');
+  if (dui) dui.addEventListener('input', e => {
+    const pos = e.target.selectionStart;
+    const antes = e.target.value.length;
+    e.target.value = duiFormato(e.target.value);
+    /* Reponer el cursor: sin esto, el guion automatico lo manda al final
+       y corregir un digito del medio se vuelve imposible. */
+    const delta = e.target.value.length - antes;
+    try { e.target.setSelectionRange(pos + delta, pos + delta); } catch (x) {}
+    e.target.style.borderColor = duiValido(e.target.value) || !e.target.value ? '' : 'var(--accent)';
+  });
+
+  const tel = document.getElementById('fPhone');
+  if (tel) tel.addEventListener('input', e => {
+    e.target.value = soloDigitos(e.target.value).slice(0, 8);
+    e.target.style.borderColor = telValido(e.target.value) || !e.target.value ? '' : 'var(--accent)';
+  });
+
   const b = document.getElementById('fBuyer'); if (b) b.focus();
 }
 function remember(k, v) { try { localStorage.setItem('kr_' + k, v); } catch (e) {} }
 function recall(k) { try { return localStorage.getItem('kr_' + k); } catch (e) { return null; } }
+
+/* DUI salvadoreno: 9 digitos (8 + digito verificador). Se guarda SIEMPRE
+   como 12345678-9 para que la base quede uniforme y se pueda buscar. */
+function soloDigitos(s) { return String(s || '').replace(/\D/g, ''); }
+function duiValido(s) { return soloDigitos(s).length === 9; }
+function duiFormato(s) {
+  const d = soloDigitos(s).slice(0, 9);
+  return d.length > 8 ? d.slice(0, 8) + '-' + d.slice(8) : d;
+}
+/* Telefono: 8 digitos exactos, sin codigo de pais ni guiones. */
+function telValido(s) { return soloDigitos(s).length === 8; }
 
 /* Normaliza a formato internacional para wa.me: 7777-7777 -> 50377777777 */
 function waNumber(raw) {
@@ -1543,6 +1661,97 @@ async function resyncEventInfo() {
   } catch (e) { toast('Error: ' + (e.message || e)); }
 }
 
+/* RESPALDO DIARIO.
+   Sin plan de pago no existe un programador en la nube, asi que no puede
+   correr "a las 3 a.m." por si solo. Lo que si podemos: cada vez que un
+   admin abre el panel, si el respaldo de HOY no existe todavia, se crea.
+   Con revisar el tablero una vez al dia queda cubierto. */
+async function saveWaTemplate() {
+  const t = document.getElementById('cfgWaTpl').value;
+  if (!t.trim()) return toast('El mensaje no puede quedar vacío');
+  await saveConfig({ waTemplate: t });
+  toast('Mensaje guardado');
+}
+async function resetWaTemplate() {
+  await saveConfig({ waTemplate: MENSAJE_DEFECTO });
+  toast('Mensaje restaurado'); render();
+}
+async function previewWaTemplate() {
+  const cfg = await getConfig();
+  const t = document.getElementById('cfgWaTpl').value;
+  const demo = { nombreComprador: 'María Ejemplo', tipoEntrada: 'Early Bird' };
+  const txt = groupMessage(demo, Object.assign({}, cfg, { waTemplate: t }), 3, 'demo');
+  openModal(`<h2>Así lo recibe el cliente</h2>
+    <div style="background:#075E54; color:#fff; padding:14px; border-radius:10px;
+      white-space:pre-wrap; font-size:14px; line-height:1.5;">${esc(txt)}</div>
+    <button class="secondary" onclick="closeModal()">Cerrar</button>`);
+}
+
+async function autoBackup(ventas) {
+  if (state.role !== 'admin') return;
+  const dia = hoyStr();
+  try {
+    const ref = doc(db, 'backups', dia);
+    const prev = await getDoc(ref);
+    if (prev.exists() && Number(prev.data().n || 0) >= ventas.length) return;
+    const filas = ventas.map(v => [
+      v.idBoleto, v.nombreComprador, v.dui, v.telefono, v.tipoEntrada,
+      v.precio, v.embajador, diaDe(v.fechaVenta), v.ingresado ? 1 : 0
+    ]);
+    await setDoc(ref, {
+      dia, n: ventas.length,
+      monto: ventas.reduce((a, v) => a + Number(v.precio || 0), 0),
+      creado: serverTimestamp(),
+      columnas: 'idBoleto,nombre,dui,telefono,tipo,precio,embajador,fecha,ingresado',
+      filas: JSON.stringify(filas)
+    });
+  } catch (e) { console.warn('backup', e); }
+}
+
+async function listBackups() {
+  const cont = document.getElementById('backupList');
+  if (!cont) return;
+  try {
+    const snap = await getDocs(query(collection(db, 'backups'), orderBy('dia', 'desc'), limit(30)));
+    if (snap.empty) { cont.innerHTML = '<div class="empty">Todavía no hay respaldos.</div>'; return; }
+    cont.innerHTML = snap.docs.map(d => {
+      const b = d.data();
+      return `<div class="list-item">
+        <div class="list-item-main">
+          <div class="list-item-title">${esc(b.dia)}${b.dia === hoyStr() ? ' · hoy' : ''}</div>
+          <div class="list-item-sub">${b.n} entradas · ${fmtMoney(b.monto || 0)}</div>
+        </div>
+        <button class="icon-btn secondary" onclick="downloadBackup('${esc(b.dia)}')">CSV</button>
+      </div>`;
+    }).join('');
+  } catch (e) { cont.innerHTML = '<div class="warn">No se pudo leer: ' + esc(e.message || e) + '</div>'; }
+}
+
+async function downloadBackup(dia) {
+  try {
+    const s = await getDoc(doc(db, 'backups', dia));
+    if (!s.exists()) return toast('No existe ese respaldo');
+    const b = s.data();
+    const filas = JSON.parse(b.filas || '[]');
+    const csv = [b.columnas].concat(
+      filas.map(f => f.map(c => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`).join(','))
+    ).join('\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `respaldo-kegrace-${dia}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
+async function forceBackup() {
+  const ventas = await getVentas();
+  await setDoc(doc(db, 'backups', hoyStr()), { n: -1 }, { merge: true });
+  await autoBackup(ventas);
+  toast('Respaldo actualizado');
+  listBackups();
+}
+
 async function saveAforo() {
   const n = Number(document.getElementById('cfgAforo').value);
   const m = Number(document.getElementById('cfgMaxCompra').value);
@@ -1557,9 +1766,13 @@ async function saveAforo() {
 async function recalcCounters() {
   try {
     const ventas = await getVentas();
-    const counts = {};
-    ventas.forEach(v => { if (v.ticketTypeId) counts[v.ticketTypeId] = (counts[v.ticketTypeId] || 0) + 1; });
-    await setDoc(doc(db, 'counters', 'tickets'), { counts, total: ventas.length }, { merge: false });
+    const counts = {}, porEmbajador = {};
+    ventas.forEach(v => {
+      if (v.ticketTypeId) counts[v.ticketTypeId] = (counts[v.ticketTypeId] || 0) + 1;
+      if (v.ambassadorId) porEmbajador[v.ambassadorId] = (porEmbajador[v.ambassadorId] || 0) + 1;
+    });
+    await setDoc(doc(db, 'counters', 'tickets'),
+      { counts, porEmbajador, total: ventas.length }, { merge: false });
     toast(`Contadores recalculados: ${ventas.length} entradas`);
     render();
   } catch (e) { toast('Error: ' + (e.message || e)); }
@@ -1592,8 +1805,8 @@ async function submitSale() {
   const maxCompra = Number(cfg.maxPorCompra || 10);
   const qty = Math.max(1, Math.min(maxCompra, Number(document.getElementById('fQty').value || 1)));
   if (!buyerName) return toast('Ingresa nombre del comprador');
-  if (!dui) return toast('Ingresa el DUI del comprador');
-  if (!waNumber(phone)) return toast('Ingresa un teléfono válido — es a donde se manda la entrada');
+  if (!duiValido(dui)) return toast('El DUI debe tener exactamente 9 dígitos');
+  if (!telValido(phone)) return toast('El teléfono debe tener exactamente 8 dígitos');
   if (!typeId) return toast('Selecciona el tipo de entrada');
   const tt = cfg.ticketTypes.find(t => t.id === typeId);
   if (!tt) return toast('Tipo inválido');
@@ -1613,7 +1826,7 @@ async function submitSale() {
         idBoleto: await generateUniqueTicketId(),
         token: generateTicketToken(),
         nombreComprador: buyerName,
-        dui, telefono: phone, correo: '',
+        dui: duiFormato(dui), telefono: soloDigitos(phone), correo: '',
         embajador: me ? me.name : state.userName,
         metodoPago: 'transferencia',
         tipoEntrada: tt.name,
@@ -1630,23 +1843,39 @@ async function submitSale() {
        Reservar de a una podria dejar a alguien con 3 de 5 pagadas. */
     const counterRef = doc(db, 'counters', 'tickets');
     const aforoTotal = Number(cfg.aforoTotal || 1000);
+    /* Cupo del embajador: 0 o ausente = sin limite. El conteo vive en el
+       mismo documento de contadores para poder verificarlo DENTRO de la
+       transaccion; contar las ventas aparte no serviria, porque entre el
+       conteo y la escritura otro embajador podria colarse. */
+    const cupoAmb = me ? Number(me.cupoMaximo || 0) : 0;
     try {
       await runTransaction(db, async (tx) => {
         const snap = await tx.get(counterRef);
         const data = snap.exists() ? (snap.data() || {}) : {};
         const counts = Object.assign({}, data.counts || {});
+        const porEmb = Object.assign({}, data.porEmbajador || {});
         const usado = Number(counts[tt.id] || 0);
         const total = Number(data.total || 0);
+        const usadoAmb = Number(porEmb[state.userId] || 0);
         if (usado + qty > tt.capacity) throw new Error('AGOTADO:' + Math.max(0, tt.capacity - usado));
         if (total + qty > aforoTotal) throw new Error('AFORO:' + Math.max(0, aforoTotal - total));
+        if (cupoAmb > 0 && usadoAmb + qty > cupoAmb) {
+          throw new Error('CUPO:' + Math.max(0, cupoAmb - usadoAmb));
+        }
         counts[tt.id] = usado + qty;
-        tx.set(counterRef, { counts, total: total + qty }, { merge: true });
+        porEmb[state.userId] = usadoAmb + qty;
+        tx.set(counterRef, { counts, porEmbajador: porEmb, total: total + qty }, { merge: true });
         sales.forEach(s => tx.set(doc(db, 'ventas', s.idBoleto), s));
       });
     } catch (te) {
       const m = String(te.message || '');
       if (m.startsWith('AGOTADO')) return toast(`Solo quedan ${m.split(':')[1]} de ${tt.name}`);
       if (m.startsWith('AFORO')) return toast(`Solo quedan ${m.split(':')[1]} lugares en total`);
+      if (m.startsWith('CUPO')) {
+        const q = m.split(':')[1];
+        return toast(q === '0' ? 'Ya usaste todo tu cupo de entradas'
+                               : `Solo te quedan ${q} entradas de tu cupo`);
+      }
       throw te;
     }
 
@@ -1778,13 +2007,35 @@ async function prepareGroupPdf(ids, sales, cfg) {
   }
 }
 
+const MENSAJE_DEFECTO = `¡Listo {nombre}! 🎃
+
+{cantidad_texto} para *{evento}*.
+
+📅 {fecha}  {hora}
+📍 {lugar}
+🎟️ {tipo}
+
+Te adjunto el PDF. Cada código se escanea una sola vez en la puerta.`;
+
+/* El texto vive en la configuracion, asi que se edita desde el panel sin
+   tocar codigo. Las llaves se reemplazan por los datos de cada venta. */
 function groupMessage(sale, cfg, n, grupoId) {
   const e = cfg.eventInfo || {};
-  return `¡Listo ${sale.nombreComprador}! 🎃\n\n`
-    + `${n > 1 ? `Tus *${n} entradas* están confirmadas` : 'Tu entrada está confirmada'} para *${e.name || 'KEG RACE'}*.\n\n`
-    + `📅 ${e.date || ''}  ${e.time || ''}\n📍 ${e.venue || ''}\n🎟️ ${sale.tipoEntrada}\n\n`
-    + (n > 1 ? `Te adjunto el PDF con los ${n} códigos, uno por persona.\nCada uno se escanea una sola vez.`
-             : `Te adjunto tu código en PDF. Se escanea una sola vez en la puerta.`);
+  const vals = {
+    '{nombre}': sale.nombreComprador || '',
+    '{evento}': e.name || 'KEG RACE',
+    '{fecha}': e.date || '',
+    '{hora}': e.time || '',
+    '{lugar}': e.venue || '',
+    '{tipo}': sale.tipoEntrada || '',
+    '{cantidad}': String(n),
+    '{cantidad_texto}': n > 1
+      ? `Tus *${n} entradas* están confirmadas`
+      : 'Tu entrada está confirmada'
+  };
+  let txt = cfg.waTemplate || MENSAJE_DEFECTO;
+  Object.keys(vals).forEach(k => { txt = txt.split(k).join(vals[k]); });
+  return txt;
 }
 
 /* Ruta A: adjunta el PDF. Pasa por el selector de contactos de WhatsApp
@@ -2299,14 +2550,16 @@ async function exportCSV() {
    global by default, so inline event attributes in the generated HTML strings would fail
    with "X is not defined" unless explicitly attached to window. */
 Object.assign(window, {
-  doLogin, logout, setAdminTab, exportCSV, viewTicket,
+  doLogin, logout, setAdminTab, exportCSV, viewTicket, filtrarDia,
   editAmbassador, removeAmbassador, saveAmbassadorModal,
   editTicketType, removeTicketType, saveTicketTypeModal,
   saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll, confirmWipeSales,
   onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
   closeModal, setAmbassadorTab, submitSale, viewGroup, sendGroupWhatsApp, downloadGroupPDF, shareGroupPDF,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
-  backfillTokens, createDoorAccount, saveAforo, recalcCounters, resyncEventInfo
+  backfillTokens, createDoorAccount, saveAforo, recalcCounters, resyncEventInfo,
+  downloadBackup, forceBackup, listBackups,
+  saveWaTemplate, resetWaTemplate, previewWaTemplate
 });
 
 /* ---------- INIT ---------- */
