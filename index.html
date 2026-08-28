@@ -1019,6 +1019,9 @@ function adminSettings(cfg) {
         Si borrás uno, esa persona queda afuera al instante aunque su cuenta exista.</div>
       <div id="rolesList"><div class="empty">Cargando…</div></div>
       <button class="secondary" onclick="repairAmbassadorRoles()">Reparar accesos de embajadores</button>
+      <button class="secondary" onclick="repairSaleAttribution()">Reparar atribución de ventas</button>
+      <div class="info-note">Usá el segundo si en el tablero un embajador aparece con 0 entradas
+        aunque sí haya vendido.</div>
       <div class="info-note">Recrea el acceso de todos los embajadores de la lista que tengan cuenta.
         Útil si se borró la colección roles por error.</div>
 
@@ -1678,6 +1681,35 @@ function resetSellForm() {
 /* Reconstruye /roles a partir de la lista de embajadores. Cada ficha guarda
    el uid de su cuenta, asi que se puede regenerar el acceso sin tocar la
    consola de Firebase. */
+/* Repara ventas que quedaron con el uid de la cuenta en vez del id de la
+   ficha del embajador. Sin esto, esas ventas no le suman a nadie en el
+   tablero ni generan comision. */
+async function repairSaleAttribution() {
+  try {
+    const [ventas, ambs] = await Promise.all([getVentas(), getAmbassadors()]);
+    const porId = new Set(ambs.map(a => a.id));
+    const porUid = new Map(ambs.filter(a => a.uid).map(a => [a.uid, a]));
+    const rotas = ventas.filter(v => v.ambassadorId && !porId.has(v.ambassadorId) && porUid.has(v.ambassadorId));
+    const huerfanas = ventas.filter(v => !v.ambassadorId || (!porId.has(v.ambassadorId) && !porUid.has(v.ambassadorId)));
+    if (!rotas.length) {
+      return toast(huerfanas.length
+        ? `Nada que reparar. Hay ${huerfanas.length} ventas sin embajador identificable.`
+        : 'Todas las ventas están bien atribuidas');
+    }
+    if (!confirm(`Se van a reasignar ${rotas.length} ventas a su embajador. ¿Continuar?`)) return;
+    let batch = writeBatch(db), n = 0;
+    for (const v of rotas) {
+      const a = porUid.get(v.ambassadorId);
+      batch.set(doc(db, 'ventas', v.idBoleto),
+        { ambassadorId: a.id, embajador: a.name }, { merge: true });
+      if (++n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+    }
+    if (n) await batch.commit();
+    await recalcCounters();
+    toast(`${rotas.length} ventas reasignadas`);
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
 async function repairAmbassadorRoles() {
   try {
     const ambs = await getAmbassadors();
@@ -1704,7 +1736,18 @@ async function grantRole() {
   if (uid.length < 20) return toast('Ese UID no parece válido. Copialo de Authentication → Users.');
   if (!name) return toast('Poné un nombre para identificar la cuenta');
   try {
-    await setDoc(doc(db, 'roles', uid), { role: kind, name });
+    const datos = { role: kind, name };
+    /* Si es embajador, hay que enlazarlo con su ficha. Sin ambassadorId sus
+       ventas quedan sin dueno: se registran bien, pero no se le atribuyen
+       a nadie y su comision sale en cero. */
+    if (kind === 'embajador') {
+      const ambs = await getAmbassadors();
+      const a = ambs.find(x => x.uid === uid);
+      if (!a) return toast('No hay ningún embajador con ese UID. Creá primero su ficha en EMBAJADORES.');
+      datos.ambassadorId = a.id;
+      datos.email = a.email || '';
+    }
+    await setDoc(doc(db, 'roles', uid), datos);
     toast('Acceso asignado a ' + name);
     document.getElementById('roleUid').value = '';
     document.getElementById('roleName').value = '';
@@ -2716,7 +2759,7 @@ Object.assign(window, {
   onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
   closeModal, setAmbassadorTab, submitSale, viewGroup, sendGroupWhatsApp, downloadGroupPDF, shareGroupPDF,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
-  backfillTokens, createDoorAccount, repairAmbassadorRoles, grantRole, revokeRole, listRoles, saveAforo, recalcCounters, resyncEventInfo,
+  backfillTokens, createDoorAccount, repairAmbassadorRoles, repairSaleAttribution, grantRole, revokeRole, listRoles, saveAforo, recalcCounters, resyncEventInfo,
   downloadBackup, forceBackup, listBackups,
   saveWaTemplate, resetWaTemplate, previewWaTemplate
 });
