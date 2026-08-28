@@ -829,10 +829,51 @@ async function saveAmbassadorModal(id) {
   }
 }
 
+/* Quitar a un embajador tiene que CORTARLE EL ACCESO, no solo sacarlo de
+   la lista. La llave real es su documento en /roles: las reglas lo consultan
+   en cada operacion, asi que borrarlo lo deja afuera al instante, aunque
+   tenga la sesion abierta. Su cuenta de Firebase sigue existiendo, pero sin
+   rol no puede leer ni escribir absolutamente nada. */
 async function removeAmbassador(id) {
-  if (!confirm('¿Eliminar este embajador? Sus ventas anteriores se mantienen.')) return;
-  await removeAmbassadorDoc(id);
-  toast('Eliminado'); render();
+  const ambs = await getAmbassadors();
+  const a = ambs.find(x => x.id === id);
+  if (!confirm(`¿Quitar a ${a ? a.name : 'este embajador'}?\n\n`
+    + 'Pierde el acceso de inmediato. Sus ventas anteriores se mantienen.')) return;
+  try {
+    if (a && a.uid) await deleteDoc(doc(db, 'roles', a.uid));
+    await removeAmbassadorDoc(id);
+    toast('Acceso revocado y embajador eliminado');
+  } catch (e) {
+    toast('Error: ' + (e.message || e));
+  }
+  render();
+}
+
+/* Suspender: le corta el acceso pero conserva su ficha y sus numeros,
+   por si es temporal o hay cuentas pendientes que cuadrar. */
+async function suspendAmbassador(id) {
+  const ambs = await getAmbassadors();
+  const a = ambs.find(x => x.id === id);
+  if (!a) return;
+  const activo = a.suspendido !== true;
+  if (!confirm(activo
+    ? `¿Suspender a ${a.name}? No va a poder entrar hasta que lo reactives.`
+    : `¿Reactivar a ${a.name}?`)) return;
+  try {
+    if (activo) {
+      if (a.uid) await deleteDoc(doc(db, 'roles', a.uid));
+      await saveAmbassador(id, { suspendido: true });
+      toast('Suspendido. Ya no puede entrar.');
+    } else {
+      if (!a.uid) return toast('Esta ficha no tiene cuenta asociada');
+      await setDoc(doc(db, 'roles', a.uid), {
+        role: 'embajador', name: a.name, ambassadorId: id, email: a.email || ''
+      });
+      await saveAmbassador(id, { suspendido: false });
+      toast('Reactivado');
+    }
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+  render();
 }
 
 function adminTickets(cfg, ventas) {
@@ -1087,13 +1128,15 @@ async function wipeSalesOnly() {
   try {
     toast('Borrando…');
     const ventas = await getVentas();
-    const [pub, chk] = await Promise.all([
+    const [pub, chk, bks] = await Promise.all([
       getDocs(collection(db, 'tickets_public')).catch(() => ({ docs: [] })),
-      getDocs(collection(db, 'checkins')).catch(() => ({ docs: [] }))
+      getDocs(collection(db, 'checkins')).catch(() => ({ docs: [] })),
+      getDocs(collection(db, 'backups')).catch(() => ({ docs: [] }))
     ]);
     await delAll('ventas', ventas.map(v => v.idBoleto));
     await delAll('tickets_public', pub.docs.map(d => d.id));
     await delAll('checkins', chk.docs.map(d => d.id));
+    await delAll('backups', bks.docs.map(d => d.id));
     await setDoc(doc(db, 'counters', 'tickets'), { counts: {}, total: 0 }, { merge: false });
     toast(`Listo: ${ventas.length} ventas borradas. Tablero en cero.`);
     render();
@@ -1722,9 +1765,21 @@ async function listBackups() {
           <div class="list-item-sub">${b.n} entradas · ${fmtMoney(b.monto || 0)}</div>
         </div>
         <button class="icon-btn secondary" onclick="downloadBackup('${esc(b.dia)}')">CSV</button>
+        <button class="icon-btn danger" onclick="deleteBackup('${esc(b.dia)}')">Borrar</button>
       </div>`;
     }).join('');
   } catch (e) { cont.innerHTML = '<div class="warn">No se pudo leer: ' + esc(e.message || e) + '</div>'; }
+}
+
+/* Un respaldo viejo puede contener ventas que ya borraste. Se elimina
+   aparte: el respaldo es una foto de ese dia, no se actualiza solo. */
+async function deleteBackup(dia) {
+  if (!confirm(`¿Borrar el respaldo del ${dia}? No se puede recuperar.`)) return;
+  try {
+    await deleteDoc(doc(db, 'backups', dia));
+    toast('Respaldo borrado');
+    listBackups();
+  } catch (e) { toast('Error: ' + (e.message || e)); }
 }
 
 async function downloadBackup(dia) {
@@ -2550,8 +2605,8 @@ async function exportCSV() {
    global by default, so inline event attributes in the generated HTML strings would fail
    with "X is not defined" unless explicitly attached to window. */
 Object.assign(window, {
-  doLogin, logout, setAdminTab, exportCSV, viewTicket, filtrarDia,
-  editAmbassador, removeAmbassador, saveAmbassadorModal,
+  doLogin, logout, setAdminTab, exportCSV, viewTicket, filtrarDia, deleteBackup,
+  editAmbassador, removeAmbassador, suspendAmbassador, saveAmbassadorModal,
   editTicketType, removeTicketType, saveTicketTypeModal,
   saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll, confirmWipeSales,
   onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
