@@ -535,6 +535,7 @@ async function renderAdmin(app) {
   } else if (state.adminTab === 'settings') {
     content.innerHTML = adminSettings(cfg);
     listBackups();
+    listRoles();
   }
 }
 function setAdminTab(t) { state.adminTab = t; render(); }
@@ -1013,6 +1014,31 @@ function adminSettings(cfg) {
         no se pueden volver a ver, solo resetear desde Firebase → Authentication.
       </div>
       <div class="divider"></div>
+      <h3 style="font-size:15px;margin:0 0 8px;">Accesos activos</h3>
+      <div class="info-note">Cada persona que puede entrar tiene un documento en <b>roles</b>.
+        Si borrás uno, esa persona queda afuera al instante aunque su cuenta exista.</div>
+      <div id="rolesList"><div class="empty">Cargando…</div></div>
+      <button class="secondary" onclick="repairAmbassadorRoles()">Reparar accesos de embajadores</button>
+      <div class="info-note">Recrea el acceso de todos los embajadores de la lista que tengan cuenta.
+        Útil si se borró la colección roles por error.</div>
+
+      <div class="divider"></div>
+      <h3 style="font-size:15px;margin:0 0 8px;">Dar acceso a una cuenta existente</h3>
+      <div class="info-note">Para cuentas que no están en la lista de embajadores — por ejemplo las de
+        puerta. El UID lo copiás de Firebase → Authentication → Users.</div>
+      <label>UID de la cuenta</label>
+      <input id="roleUid" placeholder="Ej: aVb9ropOyfgXt7NBvxmv6Ji6F1b2" autocapitalize="off" spellcheck="false">
+      <label>Nombre para identificarla</label>
+      <input id="roleName" placeholder="Ej: Puerta 1">
+      <label>Rol</label>
+      <select id="roleKind">
+        <option value="puerta">Puerta (solo escanea)</option>
+        <option value="embajador">Embajador (solo vende)</option>
+        <option value="admin">Administrador (todo)</option>
+      </select>
+      <button class="secondary" onclick="grantRole()">Asignar acceso</button>
+
+      <div class="divider"></div>
       <div class="info-note">Sesión actual: <b>${esc(auth.currentUser ? auth.currentUser.email : '—')}</b></div>
     </div>
     <div class="card">
@@ -1128,16 +1154,22 @@ async function wipeSalesOnly() {
   try {
     toast('Borrando…');
     const ventas = await getVentas();
-    const [pub, chk, bks] = await Promise.all([
+    const [pub, grp, chk, bks] = await Promise.all([
       getDocs(collection(db, 'tickets_public')).catch(() => ({ docs: [] })),
+      getDocs(collection(db, 'groups_public')).catch(() => ({ docs: [] })),
       getDocs(collection(db, 'checkins')).catch(() => ({ docs: [] })),
       getDocs(collection(db, 'backups')).catch(() => ({ docs: [] }))
     ]);
     await delAll('ventas', ventas.map(v => v.idBoleto));
     await delAll('tickets_public', pub.docs.map(d => d.id));
+    await delAll('groups_public', grp.docs.map(d => d.id));
     await delAll('checkins', chk.docs.map(d => d.id));
     await delAll('backups', bks.docs.map(d => d.id));
-    await setDoc(doc(db, 'counters', 'tickets'), { counts: {}, total: 0 }, { merge: false });
+    /* merge:false a proposito: reescribe el documento entero y de paso
+       borra porEmbajador, para que los cupos de cada vendedor vuelvan a
+       cero junto con todo lo demas. */
+    await setDoc(doc(db, 'counters', 'tickets'),
+      { counts: {}, porEmbajador: {}, total: 0 }, { merge: false });
     toast(`Listo: ${ventas.length} ventas borradas. Tablero en cero.`);
     render();
   } catch (e) { toast('Error: ' + (e.message || e)); }
@@ -1153,15 +1185,20 @@ async function wipeAll() {
       await batch.commit();
     }
   }
-  const [pub, chk] = await Promise.all([
+  const [pub, grp, chk, bks] = await Promise.all([
     getDocs(collection(db, 'tickets_public')).catch(() => ({ docs: [] })),
-    getDocs(collection(db, 'checkins')).catch(() => ({ docs: [] }))
+    getDocs(collection(db, 'groups_public')).catch(() => ({ docs: [] })),
+    getDocs(collection(db, 'checkins')).catch(() => ({ docs: [] })),
+    getDocs(collection(db, 'backups')).catch(() => ({ docs: [] }))
   ]);
   await wipeCollection('ventas', ventas.map(v => v.idBoleto));
   await wipeCollection('tickets_public', pub.docs.map(d => d.id));
+  await wipeCollection('groups_public', grp.docs.map(d => d.id));
+  await wipeCollection('backups', bks.docs.map(d => d.id));
   await wipeCollection('checkins', chk.docs.map(d => d.id));
   await wipeCollection('ambassadors', ambs.map(a => a.id));
-  await setDoc(doc(db, 'counters', 'tickets'), { counts: {}, total: 0 }, { merge: false });
+  await setDoc(doc(db, 'counters', 'tickets'),
+    { counts: {}, porEmbajador: {}, total: 0 }, { merge: false });
   toast('Todo borrado'); render();
 }
 
@@ -1636,6 +1673,73 @@ function resetSellForm() {
      en una jornada de ventas casi siempre se repiten, y volver a elegirlos
      en cada venta era medio minuto perdido por entrada. */
   const b = document.getElementById('fBuyer'); if (b) b.focus();
+}
+
+/* Reconstruye /roles a partir de la lista de embajadores. Cada ficha guarda
+   el uid de su cuenta, asi que se puede regenerar el acceso sin tocar la
+   consola de Firebase. */
+async function repairAmbassadorRoles() {
+  try {
+    const ambs = await getAmbassadors();
+    const con = ambs.filter(a => a.uid && !a.suspendido);
+    if (!con.length) return toast('Ningún embajador tiene cuenta asociada');
+    if (!confirm(`Se va a restaurar el acceso de ${con.length} embajadores. ¿Continuar?`)) return;
+    let batch = writeBatch(db), n = 0;
+    for (const a of con) {
+      batch.set(doc(db, 'roles', a.uid), {
+        role: 'embajador', name: a.name, ambassadorId: a.id, email: a.email || ''
+      });
+      if (++n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+    }
+    if (n) await batch.commit();
+    toast(`${con.length} accesos restaurados`);
+    listRoles();
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
+async function grantRole() {
+  const uid = document.getElementById('roleUid').value.trim();
+  const name = document.getElementById('roleName').value.trim();
+  const kind = document.getElementById('roleKind').value;
+  if (uid.length < 20) return toast('Ese UID no parece válido. Copialo de Authentication → Users.');
+  if (!name) return toast('Poné un nombre para identificar la cuenta');
+  try {
+    await setDoc(doc(db, 'roles', uid), { role: kind, name });
+    toast('Acceso asignado a ' + name);
+    document.getElementById('roleUid').value = '';
+    document.getElementById('roleName').value = '';
+    listRoles();
+  } catch (e) { toast('Error: ' + (e.message || e)); }
+}
+
+async function listRoles() {
+  const cont = document.getElementById('rolesList');
+  if (!cont) return;
+  try {
+    const snap = await getDocs(collection(db, 'roles'));
+    if (snap.empty) { cont.innerHTML = '<div class="empty">No hay accesos.</div>'; return; }
+    const yo = auth.currentUser ? auth.currentUser.uid : '';
+    cont.innerHTML = snap.docs.map(d => {
+      const r = d.data();
+      return `<div class="list-item">
+        <div class="list-item-main">
+          <div class="list-item-title">${esc(r.name || '(sin nombre)')}${d.id === yo ? ' · vos' : ''}</div>
+          <div class="list-item-sub">${esc(r.role)}${r.email ? ' · ' + esc(r.email) : ''}</div>
+        </div>
+        ${d.id === yo ? '' :
+          `<button class="icon-btn danger" onclick="revokeRole('${d.id}','${esc(r.name || '')}')">Quitar</button>`}
+      </div>`;
+    }).join('');
+  } catch (e) { cont.innerHTML = '<div class="warn">No se pudo leer: ' + esc(e.message || e) + '</div>'; }
+}
+
+async function revokeRole(uid, name) {
+  if (!confirm(`¿Quitarle el acceso a ${name || 'esta cuenta'}? Queda afuera de inmediato.`)) return;
+  try {
+    await deleteDoc(doc(db, 'roles', uid));
+    toast('Acceso revocado');
+    listRoles();
+  } catch (e) { toast('Error: ' + (e.message || e)); }
 }
 
 async function createDoorAccount() {
@@ -2612,7 +2716,7 @@ Object.assign(window, {
   onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
   closeModal, setAmbassadorTab, submitSale, viewGroup, sendGroupWhatsApp, downloadGroupPDF, shareGroupPDF,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
-  backfillTokens, createDoorAccount, saveAforo, recalcCounters, resyncEventInfo,
+  backfillTokens, createDoorAccount, repairAmbassadorRoles, grantRole, revokeRole, listRoles, saveAforo, recalcCounters, resyncEventInfo,
   downloadBackup, forceBackup, listBackups,
   saveWaTemplate, resetWaTemplate, previewWaTemplate
 });
