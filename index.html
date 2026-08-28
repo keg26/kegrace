@@ -267,13 +267,17 @@ function generateTicketToken(len = 22) {
   return s;
 }
 
+/* 6 caracteres sobre un alfabeto de 32 = 1,073 millones de combinaciones.
+   Con 5 la probabilidad de que dos entradas coincidieran rondaba el 2% a
+   1200 entradas; con 6 baja a menos de una en un millon. Igual se verifica
+   contra la base antes de usarlo. */
 async function generateUniqueTicketId() {
   for (let attempt = 0; attempt < 8; attempt++) {
-    const id = 'KR-' + randomTicketSuffix(5);
+    const id = 'KR-' + randomTicketSuffix(6);
     const snap = await getDoc(doc(db, 'ventas', id));
     if (!snap.exists()) return id;
   }
-  return 'KR-' + randomTicketSuffix(7);
+  return 'KR-' + randomTicketSuffix(9);
 }
 
 /* ---------- ROLES ---------- */
