@@ -512,7 +512,7 @@ async function renderAdmin(app) {
     // (eso multiplicaba lecturas innecesarias contra la cuota gratis de Firestore).
     let _cacheVentas = null, _cacheAmbs = null;
     const tryRender = () => { if (_cacheVentas && _cacheAmbs) content.innerHTML = adminDashboard(cfg, _cacheAmbs, _cacheVentas); };
-    const unsubV = listenVentas(ventas => { _cacheVentas = ventas; tryRender(); autoBackup(ventas); });
+    const unsubV = listenVentas(ventas => { _cacheVentas = ventas; tryRender(); autoBackup(ventas).catch(()=>{}); });
     const unsubA = listenAmbassadors(ambs => { _cacheAmbs = ambs; tryRender(); });
     state.unsubs.push(unsubV, unsubA);
   } else if (state.adminTab === 'newsale') {
@@ -1018,6 +1018,14 @@ function adminSettings(cfg) {
         no se pueden volver a ver, solo resetear desde Firebase → Authentication.
       </div>
       <div class="divider"></div>
+      <h3 style="font-size:15px;margin:0 0 8px;">Condiciones de ingreso (última hoja del PDF)</h3>
+      <div class="info-note">Una condición por línea. Se imprimen en la hoja final de cada PDF de entradas.</div>
+      <textarea id="cfgReglas" rows="11" style="width:100%; background:var(--surface-2);
+        color:var(--text); border:1px solid var(--line); border-radius:8px; padding:12px;
+        font-family:inherit; font-size:14px;">${esc(((cfg.reglasEntrada && cfg.reglasEntrada.length) ? cfg.reglasEntrada : REGLAS_DEFECTO).join('\n'))}</textarea>
+      <button class="secondary" onclick="saveReglas()">Guardar condiciones</button>
+
+      <div class="divider"></div>
       <h3 style="font-size:15px;margin:0 0 8px;">Accesos activos</h3>
       <div class="info-note">Cada persona que puede entrar tiene un documento en <b>roles</b>.
         Si borrás uno, esa persona queda afuera al instante aunque su cuenta exista.</div>
@@ -1454,17 +1462,26 @@ async function drawTicket(canvas, sale, cfg) {
   const w1 = ctx.measureText(line1).width;
   ctx.font = `400 ${Math.round(fontPx*0.85)}px Arial, sans-serif`;
   const w2 = ctx.measureText(line2).width;
-  const boxW = Math.max(w1, w2) + fontPx;
-  const boxH = fontPx * 2.6;
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  ctx.fillRect(textX - fontPx*0.5, textY - fontPx*0.5, boxW, boxH);
+  /* El recuadro se ajusta al texto mas largo de las dos lineas, con un
+     margen chico. Antes sobraba casi un caracter completo a la derecha y
+     se veia un bloque blanco flotando mas ancho que el nombre. */
+  const padX = fontPx * 0.28;
+  const padY = fontPx * 0.24;
+  const boxW = Math.max(w1, w2) + padX * 2;
+  const boxH = fontPx * 2.25 + padY;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  const bx = textX - padX, by = textY - padY;
+  const r = Math.round(fontPx * 0.22);
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, by, boxW, boxH, r); ctx.fill(); }
+  else ctx.fillRect(bx, by, boxW, boxH);
 
   ctx.textAlign = 'left';
   ctx.fillStyle = stamp.fontColor || '#111111';
   ctx.font = `700 ${fontPx}px Arial, sans-serif`;
-  ctx.fillText(line1, textX, textY + fontPx*0.9);
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(line1, textX, textY + fontPx * 0.82);
   ctx.font = `400 ${Math.round(fontPx*0.85)}px Arial, sans-serif`;
-  ctx.fillText(line2, textX, textY + fontPx*2.0);
+  ctx.fillText(line2, textX, textY + fontPx * 1.85);
 
   return canvas;
 }
@@ -1515,7 +1532,7 @@ async function renderAmbassador(app) {
             ${pend.map(v => `<div class="list-item">
               <div class="list-item-main">
                 <div class="list-item-title">${esc(v.nombreComprador)}</div>
-                <div class="list-item-sub">${esc(v.telefono||'sin teléfono')} · ${esc(v.tipoEntrada||'')}</div>
+                <div class="list-item-sub">${esc(telFormato(v.telefono)||'sin teléfono')} · ${esc(v.tipoEntrada||'')}</div>
               </div>
               <button class="icon-btn success" onclick="resendSale('${v.idBoleto}')">Enviar</button>
             </div>`).join('')}
@@ -1561,8 +1578,8 @@ function ambassadorSellForm(cfg) {
       <input id="fBuyer" placeholder="Nombre completo">
       <label>DUI del comprador * (9 dígitos)</label>
       <input id="fDui" placeholder="04512345-6" inputmode="numeric" maxlength="10" autocomplete="off">
-      <label>Teléfono * (8 dígitos — a este número se manda la entrada)</label>
-      <input id="fPhone" placeholder="77777777" inputmode="numeric" maxlength="8" autocomplete="off">
+      <label>Teléfono * (a este número se manda la entrada)</label>
+      <input id="fPhone" placeholder="7666-9999" inputmode="numeric" maxlength="9" autocomplete="off">
       <label>Tipo de entrada *</label>
       <select id="fType">
         <option value="" selected disabled>Selecciona un tipo…</option>
@@ -1594,13 +1611,11 @@ function setupSellForm(cfg) {
     document.getElementById('fTotal').textContent =
       hasPrice ? fmtMoney(Number(opt.dataset.price) * n) + (n > 1 ? ` (${n} × ${fmtMoney(Number(opt.dataset.price))})` : '') : '—';
   };
-  sel.addEventListener('change', () => { remember('lastType', sel.value); updateTotal(); });
+  sel.addEventListener('change', updateTotal);
   qty.addEventListener('change', updateTotal);
 
   /* Vender 30 Early Bird seguidos no deberia obligar a elegir "Early Bird"
      30 veces. Se recuerda lo ultimo usado en ESTE dispositivo. */
-  const lt = recall('lastType');
-  if (lt && [...sel.options].some(o => o.value === lt)) sel.value = lt;
   updateTotal();
   const dui = document.getElementById('fDui');
   if (dui) dui.addEventListener('input', e => {
@@ -1616,7 +1631,10 @@ function setupSellForm(cfg) {
 
   const tel = document.getElementById('fPhone');
   if (tel) tel.addEventListener('input', e => {
-    e.target.value = soloDigitos(e.target.value).slice(0, 8);
+    const pos = e.target.selectionStart, antes = e.target.value.length;
+    e.target.value = telFormato(e.target.value);
+    const delta = e.target.value.length - antes;
+    try { e.target.setSelectionRange(pos + delta, pos + delta); } catch (x) {}
     e.target.style.borderColor = telValido(e.target.value) || !e.target.value ? '' : 'var(--accent)';
   });
 
@@ -1633,8 +1651,14 @@ function duiFormato(s) {
   const d = soloDigitos(s).slice(0, 9);
   return d.length > 8 ? d.slice(0, 8) + '-' + d.slice(8) : d;
 }
-/* Telefono: 8 digitos exactos, sin codigo de pais ni guiones. */
+/* Telefono: 8 digitos, mostrados como 7666-9999. El guion es solo visual:
+   en la base se guardan los 8 digitos limpios, para que wa.me funcione y
+   para que las reglas de Firestore puedan validarlo. */
 function telValido(s) { return soloDigitos(s).length === 8; }
+function telFormato(s) {
+  const d = soloDigitos(s).slice(0, 8);
+  return d.length > 4 ? d.slice(0, 4) + '-' + d.slice(4) : d;
+}
 
 /* Normaliza a formato internacional para wa.me: 7777-7777 -> 50377777777 */
 function waNumber(raw) {
@@ -1644,20 +1668,12 @@ function waNumber(raw) {
   if (d.length === 11 && d.startsWith('503')) return d;
   return d;
 }
-function ticketUrl(token) {
-  return location.origin + location.pathname.replace(/[^/]*$/, '') + 't.html?k=' + encodeURIComponent(token);
-}
-function waMessage(sale, cfg) {
-  const e = cfg.eventInfo || {};
-  return `¡Listo ${sale.nombreComprador}! 🎃\n\nTu entrada para *${e.eventName || 'KEG RACE'}* está confirmada.\n\n`
-    + `📅 ${e.eventDate || ''}\n📍 ${e.venue || ''}\n🎟️ ${sale.tipoEntrada}  ·  ${sale.idBoleto}\n\n`
-    + `Abrí este enlace para ver tu código QR:\n${ticketUrl(sale.token)}\n\n`
-    + `Guardalo o tomale captura. Se escanea una sola vez en la puerta.`;
-}
+/* El mensaje de WhatsApp ya no lleva enlaces al sitio: la entrada viaja
+   como PDF o como imagen adjunta. */
 function openWhatsApp(sale, cfg) {
   const n = waNumber(sale.telefono);
-  const url = (n ? 'https://wa.me/' + n : 'https://wa.me/') + '?text=' + encodeURIComponent(waMessage(sale, cfg));
-  window.open(url, '_blank');
+  const msg = groupMessage(sale, cfg, 1, null);
+  window.open((n ? 'https://wa.me/' + n : 'https://wa.me/') + '?text=' + encodeURIComponent(msg), '_blank');
   markSent(sale.idBoleto);
 }
 async function markSent(idBoleto) {
@@ -1671,6 +1687,24 @@ async function markSent(idBoleto) {
    duplicar una venta por accidente desaparezca desde el momento en que ya
    quedó guardada, no mientras el embajador todavía está viendo/descargando/
    enviando la entrada. */
+/* Se llama al cerrar la ficha de la compra: deja el formulario como recien
+   abierto, con el tipo de entrada SIN seleccionar. Antes quedaba pegado el
+   ultimo tipo usado, lo que ahorraba tiempo pero se prestaba a registrar
+   una entrada del tipo equivocado sin darse cuenta. */
+function resetSellFormFull() {
+  ['fBuyer', 'fDui', 'fPhone'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.value = ''; el.style.borderColor = ''; }
+  });
+  const sel = document.getElementById('fType');
+  if (sel) sel.selectedIndex = 0;
+  const qty = document.getElementById('fQty');
+  if (qty) qty.selectedIndex = 0;
+  const tot = document.getElementById('fTotal');
+  if (tot) tot.textContent = '—';
+  const b = document.getElementById('fBuyer'); if (b) b.focus();
+}
+
 function resetSellForm() {
   ['fBuyer','fDui','fPhone'].forEach(id => {
     const el = document.getElementById(id);
@@ -1688,6 +1722,14 @@ function resetSellForm() {
 /* Repara ventas que quedaron con el uid de la cuenta en vez del id de la
    ficha del embajador. Sin esto, esas ventas no le suman a nadie en el
    tablero ni generan comision. */
+async function saveReglas() {
+  const t = document.getElementById('cfgReglas').value
+    .split('\n').map(s => s.trim()).filter(Boolean);
+  if (!t.length) return toast('Escribí al menos una condición');
+  await saveConfig({ reglasEntrada: t });
+  toast(`${t.length} condiciones guardadas`);
+}
+
 async function repairSaleAttribution() {
   try {
     const [ventas, ambs] = await Promise.all([getVentas(), getAmbassadors()]);
@@ -1887,7 +1929,10 @@ async function autoBackup(ventas) {
   try {
     const ref = doc(db, 'backups', dia);
     const prev = await getDoc(ref);
-    if (prev.exists() && Number(prev.data().n || 0) >= ventas.length) return;
+    /* Antes se comparaba con >=, asi que si el numero de ventas BAJABA
+       (por ejemplo al borrar pruebas) el respaldo nunca se actualizaba y el
+       boton parecia muerto. Ahora se reescribe siempre que el numero cambie. */
+    if (prev.exists() && Number(prev.data().n) === ventas.length) return;
     const filas = ventas.map(v => [
       v.idBoleto, v.nombreComprador, v.dui, v.telefono, v.tipoEntrada,
       v.precio, v.embajador, diaDe(v.fechaVenta), v.ingresado ? 1 : 0
@@ -1899,7 +1944,10 @@ async function autoBackup(ventas) {
       columnas: 'idBoleto,nombre,dui,telefono,tipo,precio,embajador,fecha,ingresado',
       filas: JSON.stringify(filas)
     });
-  } catch (e) { console.warn('backup', e); }
+  } catch (e) {
+    console.warn('backup', e);
+    throw e;   // que el llamador decida si avisar al usuario
+  }
 }
 
 async function listBackups() {
@@ -1951,10 +1999,15 @@ async function downloadBackup(dia) {
 }
 
 async function forceBackup() {
-  const ventas = await getVentas();
-  await setDoc(doc(db, 'backups', hoyStr()), { n: -1 }, { merge: true });
-  await autoBackup(ventas);
-  toast('Respaldo actualizado');
+  try {
+    const ventas = await getVentas();
+    if (!ventas.length) return toast('No hay ventas para respaldar');
+    await setDoc(doc(db, 'backups', hoyStr()), { n: -1 }, { merge: true });
+    await autoBackup(ventas);
+    toast(`Respaldo guardado: ${ventas.length} entradas`);
+  } catch (e) {
+    toast('No se pudo respaldar: ' + (e.message || e));
+  }
   listBackups();
 }
 
@@ -2149,7 +2202,7 @@ async function viewGroup(grupoId, idBoletos) {
   const s0 = sales[0];
   openModal(`
     <h2>${n > 1 ? n + ' entradas' : 'Entrada'} de ${esc(s0.nombreComprador)}</h2>
-    <div class="info-note">${esc(s0.tipoEntrada)} · ${fmtMoney(s0.precio * n)} · ${esc(s0.telefono)}</div>
+    <div class="info-note">${esc(s0.tipoEntrada)} · ${fmtMoney(s0.precio * n)} · ${esc(telFormato(s0.telefono))}</div>
     <div style="margin:12px 0; max-height:180px; overflow-y:auto;">
       ${sales.map(s => `<div class="list-item"><div class="list-item-main">
         <div class="list-item-title">${esc(s.idBoleto)}</div>
@@ -2158,34 +2211,20 @@ async function viewGroup(grupoId, idBoletos) {
     <button class="success" id="waPdfBtn" disabled
       onclick="shareGroupPDF('${grupoId}','${idBoletos.join(',')}')">Armando el PDF…</button>
     <div class="info-note">Adjunta el PDF con ${n > 1 ? 'las ' + n + ' entradas' : 'la entrada'} y el mensaje.
-      WhatsApp te va a pedir que elijas el contacto — buscá <b>${esc(s0.telefono)}</b>.
+      WhatsApp te va a pedir que elijas el contacto — buscá <b>${esc(telFormato(s0.telefono))}</b>.
       No permite adjuntar archivos abriendo el chat directo.</div>
+    <div class="divider"></div>
+    <button class="secondary" id="imgBtn" disabled onclick="shareGroupImages('${idBoletos.join(',')}')">
+      Armando las imágenes…</button>
+    <div class="info-note">Para <b>Instagram</b>, que no acepta archivos PDF en el mensaje directo.
+      Manda una imagen por entrada.</div>
     <div class="divider"></div>
     <button class="secondary" id="pdfBtn" onclick="downloadGroupPDF('${idBoletos.join(',')}')">
       Descargar PDF (${n} página${n > 1 ? 's' : ''})</button>
-    <button class="secondary" onclick="closeModal()">Cerrar</button>
+    <button class="secondary" onclick="closeModal(); resetSellFormFull();">Cerrar y registrar otra</button>
   `);
   prepareGroupPdf(idBoletos, sales, cfg);
-}
-
-function groupUrl(grupoId) {
-  return location.origin + location.pathname.replace(/[^/]*$/, '') + 't.html?g=' + encodeURIComponent(grupoId);
-}
-
-async function sendGroupWhatsApp(grupoId, ids) {
-  const cfg = await getConfig();
-  const idList = ids.split(',');
-  const s = (await getDoc(doc(db, 'ventas', idList[0]))).data();
-  const e = cfg.eventInfo || {};
-  const n = idList.length;
-  const msg = `¡Listo ${s.nombreComprador}! 🎃\n\n`
-    + `${n > 1 ? `Tus *${n} entradas* están` : 'Tu entrada está'} confirmada${n > 1 ? 's' : ''} para *${e.name || 'KEG RACE'}*.\n\n`
-    + `📅 ${e.date || ''}  ${e.time || ''}\n📍 ${e.venue || ''}\n🎟️ ${s.tipoEntrada}\n\n`
-    + `Abrí este enlace para ver ${n > 1 ? 'los códigos QR' : 'tu código QR'}:\n${groupUrl(grupoId)}\n\n`
-    + (n > 1 ? `Son ${n} códigos distintos, uno por persona. Cada uno se escanea una sola vez.`
-             : `Se escanea una sola vez en la puerta.`);
-  window.open('https://wa.me/' + waNumber(s.telefono) + '?text=' + encodeURIComponent(msg), '_blank');
-  idList.forEach(id => markSent(id));
+  prepareGroupImages(idBoletos, cfg);
 }
 
 /* PDF de una pagina por entrada. Cada pagina lleva SU propio QR: son
@@ -2212,6 +2251,19 @@ async function prepareGroupPdf(ids, sales, cfg) {
     if (b) { b.disabled = true; b.textContent = 'No se pudo armar el PDF'; }
   }
 }
+
+const REGLAS_DEFECTO = [
+  'Nos reservamos el derecho de admisión y permanencia.',
+  'No nos hacemos responsables por objetos perdidos u olvidados.',
+  'Prohibido el ingreso con alimentos, bebidas y objetos puntiagudos.',
+  'Al ingresar al evento, usted acepta ser fotografiado y/o filmado para fines promocionales de nuestras marcas.',
+  'Es obligatorio presentar identificación oficial (DUI) el día del evento.',
+  'Prohibida la entrada a menores de 18 años.',
+  'Boletos no reembolsables ni transferibles. NO NOS HACEMOS RESPONSABLES DEL MAL MANEJO DE SUS ENTRADAS.',
+  'Toda persona en estado de ebriedad o con comportamiento agresivo será retirada del evento y cubrirá un costo adicional.',
+  'La organización se reserva el derecho de modificar el programa sin previo aviso.',
+  'Prohibido el ingreso de armas, objetos punzocortantes o sustancias ilegales.'
+];
 
 const MENSAJE_DEFECTO = `¡Listo {nombre}! 🎃
 
@@ -2246,6 +2298,53 @@ function groupMessage(sale, cfg, n, grupoId) {
 
 /* Ruta A: adjunta el PDF. Pasa por el selector de contactos de WhatsApp
    porque wa.me no admite archivos — es limite de WhatsApp, no del codigo. */
+/* Instagram NO acepta archivos en el DM: ni PDF ni nada que no sea foto o
+   video. Pero sí acepta imágenes. Esto genera un PNG por entrada y los
+   comparte juntos, así se pueden mandar por Instagram, Telegram o donde sea. */
+async function shareGroupImages(ids) {
+  const btn = document.getElementById('imgBtn');
+  const idList = ids.split(',');
+  const hit = groupImgCache.get(ids);
+  if (!hit) return toast('Las imágenes todavía se están armando, esperá un segundo');
+  try {
+    if (navigator.canShare && navigator.canShare({ files: hit.files })) {
+      await navigator.share({ files: hit.files, title: 'Entradas KEG RACE' });
+      idList.forEach(id => markSent(id));
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+  /* Sin compartir nativo: descarga una por una. */
+  hit.files.forEach((f, i) => setTimeout(() => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(f); a.download = f.name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }, i * 400));
+  idList.forEach(id => markSent(id));
+}
+
+const groupImgCache = new Map();
+
+async function prepareGroupImages(ids, cfg) {
+  try {
+    const files = [];
+    for (let i = 0; i < ids.length; i++) {
+      const s = (await getDoc(doc(db, 'ventas', ids[i]))).data();
+      const cv = document.createElement('canvas');
+      await drawTicket(cv, s, cfg);
+      const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+      files.push(new File([blob], `entrada-${s.idBoleto}.png`, { type: 'image/png' }));
+    }
+    groupImgCache.set(ids.join(','), { files });
+    const b = document.getElementById('imgBtn');
+    if (b) { b.disabled = false; b.textContent = `Enviar como imágenes (${files.length})`; }
+  } catch (e) {
+    const b = document.getElementById('imgBtn');
+    if (b) { b.disabled = true; b.textContent = 'No se pudieron armar las imágenes'; }
+  }
+}
+
 async function shareGroupPDF(grupoId, ids) {
   const idList = ids.split(',');
   const hit = groupPdfCache.get(ids);
@@ -2332,9 +2431,9 @@ async function buildGroupPDF(idList, cfg) {
         pdf.setFont('helvetica', 'bold'); pdf.setFontSize(fs);
         const l1 = String(s.idBoleto || '');
         const l2 = `${s.nombreComprador || ''} · ${s.indice || 1}/${s.totalGrupo || idList.length}`;
-        const bw = Math.max(pdf.getTextWidth(l1), pdf.getTextWidth(l2)) + fs * 1.1;
+        const bw = Math.max(pdf.getTextWidth(l1), pdf.getTextWidth(l2)) + fs * 0.56;
         pdf.setFillColor(255, 255, 255);
-        pdf.roundedRect(txx - fs * 0.55, txy - fs * 0.95, bw, fs * 2.7, fs * 0.25, fs * 0.25, 'F');
+        pdf.roundedRect(txx - fs * 0.28, txy - fs * 0.88, bw, fs * 2.3, fs * 0.22, fs * 0.22, 'F');
         pdf.setTextColor(17, 17, 17);
         pdf.text(l1, txx, txy);
         pdf.setFont('helvetica', 'normal'); pdf.setFontSize(fs * 0.85);
@@ -2360,8 +2459,49 @@ async function buildGroupPDF(idList, cfg) {
                  W / 2, 690, { align: 'center' });
       }
     }
+    /* Ultima pagina: condiciones. Va aparte y no encima del arte, para que
+       se lea de verdad y no compita con el QR. */
+    dibujarReglas(pdf, cfg);
     return pdf.output('blob');
   }
+}
+
+function dibujarReglas(pdf, cfg) {
+  const reglas = (cfg.reglasEntrada && cfg.reglasEntrada.length)
+    ? cfg.reglasEntrada : REGLAS_DEFECTO;
+  const e = cfg.eventInfo || {};
+  pdf.addPage();
+  const W = pdf.internal.pageSize.getWidth();
+  const H = pdf.internal.pageSize.getHeight();
+
+  pdf.setFillColor(10, 10, 10); pdf.rect(0, 0, W, H, 'F');
+  pdf.setTextColor(230, 64, 43); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(22);
+  pdf.text('KEG RACE', 48, 62);
+  pdf.setTextColor(245, 245, 245); pdf.setFontSize(26);
+  pdf.text('CONDICIONES DE INGRESO', 48, 96);
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(11);
+  pdf.setTextColor(150, 150, 150);
+  pdf.text(`${e.name || ''} · ${e.date || ''} · ${e.venue || ''}`, 48, 118);
+
+  pdf.setDrawColor(60, 60, 60);
+  pdf.line(48, 134, W - 48, 134);
+
+  let y = 164;
+  pdf.setFontSize(11.5);
+  reglas.forEach(r => {
+    const lineas = pdf.splitTextToSize(String(r), W - 118);
+    if (y + lineas.length * 16 > H - 90) { pdf.addPage(); pdf.setFillColor(10,10,10); pdf.rect(0,0,W,H,'F'); y = 70; }
+    pdf.setTextColor(230, 64, 43); pdf.setFont('helvetica', 'bold');
+    pdf.text('•', 48, y);
+    pdf.setTextColor(228, 228, 228); pdf.setFont('helvetica', 'normal');
+    pdf.text(lineas, 66, y);
+    y += lineas.length * 16 + 12;
+  });
+
+  pdf.setDrawColor(60, 60, 60);
+  pdf.line(48, H - 74, W - 48, H - 74);
+  pdf.setTextColor(130, 130, 130); pdf.setFontSize(10);
+  pdf.text('Al presentar esta entrada usted acepta las condiciones anteriores.', 48, H - 52);
 }
 
 function loadImageSafe(url) {
@@ -2372,39 +2512,19 @@ function loadImageSafe(url) {
   });
 }
 
+/* Ver una entrada ya vendida abre exactamente la misma ficha que al
+   registrarla: PDF, imagenes y el mensaje de WhatsApp. Si la compra fue de
+   varias entradas, las trae todas juntas. */
 async function viewTicket(idBoleto) {
-  const snap = await getDoc(doc(db, 'ventas', idBoleto));
-  if (!snap.exists()) return toast('No encontrado');
-  const sale = snap.data();
-  const cfg = await getConfig();
-
-  openModal(`
-    <h2 style="text-align:center;">${esc(cfg.eventInfo.name)}</h2>
-    <div class="ticket-canvas-wrap"><canvas id="ticketCanvas"></canvas></div>
-    <div style="text-align:center; font-family:monospace; font-size:12px; color:var(--muted); margin-top:8px;">${esc(sale.idBoleto)}</div>
-    <div class="row" style="margin-top:14px;">
-      <button class="success" id="btnWa" onclick="sendViaLink('${idBoleto}')">Enviar por WhatsApp</button>
-      <button class="secondary" id="btnImg" disabled onclick="downloadTicketPNG('${idBoleto}')">Imagen</button>
-    </div>
-    <div class="row" style="margin-top:8px;">
-      <button class="secondary" id="btnPdf" disabled onclick="downloadTicketPDF('${idBoleto}')">Preparando…</button>
-      <button class="secondary" id="btnEmail" disabled onclick="sendTicketEmail('${idBoleto}')">Correo</button>
-    </div>
-    <button class="ghost" style="margin-top:8px;" onclick="closeModal()">Cerrar</button>
-  `);
-
-  const canvas = document.getElementById('ticketCanvas');
-  await drawTicket(canvas, sale, cfg);
-  await prepareTicketAssets(idBoleto, canvas, sale, cfg);
-
-  const btnWa = document.getElementById('btnWa');
-  const btnImg = document.getElementById('btnImg');
-  const btnPdf = document.getElementById('btnPdf');
-  const btnEmail = document.getElementById('btnEmail');
-  if (btnWa)  { btnWa.disabled = false;  btnWa.textContent = 'WhatsApp'; }
-  if (btnImg) { btnImg.disabled = false; }
-  if (btnPdf) { btnPdf.disabled = false; btnPdf.textContent = 'Descargar PDF'; }
-  if (btnEmail) { btnEmail.disabled = false; btnEmail.textContent = sale.correo ? 'Correo' : 'Correo (sin dirección)'; }
+  try {
+    const snap = await getDoc(doc(db, 'ventas', idBoleto));
+    if (!snap.exists()) return toast('No se encontró la venta');
+    const s = snap.data();
+    if (!s.grupoId) return viewGroup(idBoleto, [idBoleto]);
+    const q = await getDocs(query(collection(db, 'ventas'), where('grupoId', '==', s.grupoId)));
+    const ids = q.docs.map(d => d.id).sort();
+    return viewGroup(s.grupoId, ids.length ? ids : [idBoleto]);
+  } catch (e) { toast('Error: ' + (e.message || e)); }
 }
 
 function downloadBlob(blob, filename) {
@@ -2759,9 +2879,9 @@ Object.assign(window, {
   doLogin, logout, setAdminTab, exportCSV, viewTicket, filtrarDia, deleteBackup,
   editAmbassador, removeAmbassador, suspendAmbassador, saveAmbassadorModal,
   editTicketType, removeTicketType, saveTicketTypeModal,
-  saveEventInfo, saveEmailJsConfig, saveWipeCode, confirmWipeAll, confirmWipeSales,
+  saveEventInfo, saveReglas, saveEmailJsConfig, saveWipeCode, confirmWipeAll, confirmWipeSales,
   onTemplateFileChosen, removeTemplate, saveTemplateUrl, onStampChange, saveStampConfig,
-  closeModal, setAmbassadorTab, submitSale, viewGroup, sendGroupWhatsApp, downloadGroupPDF, shareGroupPDF,
+  closeModal, setAmbassadorTab, submitSale, resetSellFormFull, viewGroup, downloadGroupPDF, shareGroupPDF, shareGroupImages,
   shareWhatsApp, sendViaLink, resendSale, downloadTicketPNG, downloadTicketPDF, sendTicketEmail, manualEntry, restartScanner,
   backfillTokens, createDoorAccount, repairAmbassadorRoles, repairSaleAttribution, grantRole, revokeRole, listRoles, saveAforo, recalcCounters, resyncEventInfo,
   downloadBackup, forceBackup, listBackups,
