@@ -670,7 +670,11 @@ function adminSales(cfg, ventas) {
             <td>${esc(v.metodoPago||'')}</td>
             <td>${v.ingresado ? '<span class="badge green">Ingresado</span>' : '<span class="badge orange">Válido</span>'}</td>
             <td style="font-family:monospace; font-size:11px;">${esc(v.idBoleto)}</td>
-            <td><button class="icon-btn secondary" onclick="viewTicket('${v.idBoleto}')">Ver</button></td>
+            <td style="white-space:nowrap">
+              <button class="icon-btn secondary" onclick="viewTicket('${v.idBoleto}')">Ver</button>
+              ${state.role === 'admin'
+                ? `<button class="icon-btn danger" onclick="deleteSale('${v.idBoleto}')">Borrar</button>` : ''}
+            </td>
           </tr>`).join('')}
           </tbody>
         </table></div>`
@@ -2515,6 +2519,66 @@ function loadImageSafe(url) {
 /* Ver una entrada ya vendida abre exactamente la misma ficha que al
    registrarla: PDF, imagenes y el mensaje de WhatsApp. Si la compra fue de
    varias entradas, las trae todas juntas. */
+/* Borra una venta y deja todo cuadrado en una sola operacion:
+   quita el documento, libera el cupo del tipo y del embajador, limpia la
+   copia publica y saca el token de su grupo. El contador se ajusta DENTRO
+   de la transaccion, asi que no hace falta recalcular despues. */
+async function deleteSale(idBoleto) {
+  if (state.role !== 'admin') return toast('Solo el administrador puede borrar ventas');
+  try {
+    const snap = await getDoc(doc(db, 'ventas', idBoleto));
+    if (!snap.exists()) return toast('Esa venta ya no existe');
+    const v = snap.data();
+
+    let aviso = `¿Borrar la entrada ${idBoleto}?\n\n`
+      + `${v.nombreComprador}\n${v.tipoEntrada} · ${fmtMoney(v.precio)}\n`
+      + `Vendida por ${v.embajador || '—'}\n\n`
+      + 'No se puede deshacer. El código deja de funcionar en la puerta.';
+    if (v.ingresado) {
+      aviso = `⚠️ ATENCIÓN: esta persona YA INGRESÓ al evento.\n\n` + aviso;
+    }
+    if (!confirm(aviso)) return;
+
+    const counterRef = doc(db, 'counters', 'tickets');
+    await runTransaction(db, async (tx) => {
+      const cs = await tx.get(counterRef);
+      const data = cs.exists() ? (cs.data() || {}) : {};
+      const counts = Object.assign({}, data.counts || {});
+      const porEmb = Object.assign({}, data.porEmbajador || {});
+      if (v.ticketTypeId) counts[v.ticketTypeId] = Math.max(0, Number(counts[v.ticketTypeId] || 0) - 1);
+      if (v.ambassadorId) porEmb[v.ambassadorId] = Math.max(0, Number(porEmb[v.ambassadorId] || 0) - 1);
+      tx.set(counterRef, {
+        counts, porEmbajador: porEmb,
+        total: Math.max(0, Number(data.total || 0) - 1)
+      }, { merge: true });
+      tx.delete(doc(db, 'ventas', idBoleto));
+    });
+
+    /* Fuera de la transaccion: si algo de esto falla, la venta ya se borro
+       y el cupo ya se libero, que es lo que importa. */
+    if (v.token) {
+      try { await deleteDoc(doc(db, 'tickets_public', v.token)); } catch (e) {}
+    }
+    if (v.grupoId) {
+      try {
+        const g = await getDoc(doc(db, 'groups_public', v.grupoId));
+        if (g.exists()) {
+          const quedan = (g.data().tokens || []).filter(t => t !== v.token);
+          if (quedan.length) {
+            await setDoc(doc(db, 'groups_public', v.grupoId), { tokens: quedan, total: quedan.length }, { merge: true });
+          } else {
+            await deleteDoc(doc(db, 'groups_public', v.grupoId));
+          }
+        }
+      } catch (e) {}
+    }
+
+    toast(`${idBoleto} borrada · cupo liberado`);
+  } catch (e) {
+    toast('Error: ' + (e.message || e));
+  }
+}
+
 async function viewTicket(idBoleto) {
   try {
     const snap = await getDoc(doc(db, 'ventas', idBoleto));
@@ -2876,7 +2940,7 @@ async function exportCSV() {
    global by default, so inline event attributes in the generated HTML strings would fail
    with "X is not defined" unless explicitly attached to window. */
 Object.assign(window, {
-  doLogin, logout, setAdminTab, exportCSV, viewTicket, filtrarDia, deleteBackup,
+  doLogin, logout, setAdminTab, exportCSV, viewTicket, deleteSale, filtrarDia, deleteBackup,
   editAmbassador, removeAmbassador, suspendAmbassador, saveAmbassadorModal,
   editTicketType, removeTicketType, saveTicketTypeModal,
   saveEventInfo, saveReglas, saveEmailJsConfig, saveWipeCode, confirmWipeAll, confirmWipeSales,
