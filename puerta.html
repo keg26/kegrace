@@ -837,7 +837,13 @@ document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible' && S.authed){
     if(!S.scanning) startCam();
     startLiveSync();
-  } else if(document.visibilityState==='hidden'){ stopCam(); stopLiveSync(); }
+  } else if(document.visibilityState==='hidden'){
+    /* Se apaga la camara para no gastar bateria, pero la suscripcion se
+       DEJA viva: cerrarla y reabrirla relee la coleccion entera, y con la
+       pantalla prendiendose y apagandose toda la noche eso agota la cuota
+       de lecturas de Firestore. */
+    stopCam();
+  }
 });
 window.addEventListener('beforeunload',e=>{
   if(S.queue.length){ e.preventDefault(); e.returnValue=''; }

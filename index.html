@@ -330,15 +330,36 @@ async function createVenta(sale) {
 }
 
 /* Realtime listeners (returns unsubscribe fn) */
+/* UN SOLO listener por coleccion para toda la sesion.
+   Antes cada cambio de pestana cerraba y volvia a abrir la suscripcion, y
+   cada reapertura relee la coleccion ENTERA. Con 700 ventas, cinco clics
+   del admin eran 3.500 lecturas. Ahora la suscripcion vive una sola vez y
+   las pestanas se enganchan a ella: una lectura completa por sesion. */
+const _hub = { ventas: { unsub: null, cache: null, subs: [] },
+               ambs:   { unsub: null, cache: null, subs: [] } };
+
+function _engancha(canal, cb, arranque) {
+  const c = _hub[canal];
+  c.subs.push(cb);
+  if (c.cache) { try { cb(c.cache); } catch (e) {} }
+  if (!c.unsub) c.unsub = arranque(datos => {
+    c.cache = datos;
+    c.subs.forEach(f => { try { f(datos); } catch (e) {} });
+  });
+  return () => { c.subs = c.subs.filter(f => f !== cb); };
+}
+
 function listenVentas(cb) {
-  return onSnapshot(query(collection(db, 'ventas'), orderBy('fechaVenta', 'desc')), snap => {
-    cb(snap.docs.map(d => d.data()));
-  }, err => console.error('listenVentas', err));
+  return _engancha('ventas', cb, push =>
+    onSnapshot(query(collection(db, 'ventas'), orderBy('fechaVenta', 'desc')),
+      snap => push(snap.docs.map(d => d.data())),
+      err => console.error('listenVentas', err)));
 }
 function listenAmbassadors(cb) {
-  return onSnapshot(query(collection(db, 'ambassadors'), orderBy('createdAt', 'asc')), snap => {
-    cb(snap.docs.map(d => Object.assign({ id: d.id }, d.data())));
-  }, err => console.error('listenAmbassadors', err));
+  return _engancha('ambs', cb, push =>
+    onSnapshot(query(collection(db, 'ambassadors'), orderBy('createdAt', 'asc')),
+      snap => push(snap.docs.map(d => Object.assign({ id: d.id }, d.data()))),
+      err => console.error('listenAmbassadors', err)));
 }
 function listenVentasByAmbassador(ambassadorId, cb) {
   return onSnapshot(query(collection(db, 'ventas'), where('ambassadorId', '==', ambassadorId)), snap => {
@@ -1589,6 +1610,7 @@ function ambassadorSellForm(cfg) {
         <option value="" selected disabled>Selecciona un tipo…</option>
         ${cfg.ticketTypes.map(t => `<option value="${t.id}" data-price="${t.price}" data-name="${esc(t.name)}">${esc(t.name)} - ${fmtMoney(t.price)}</option>`).join('')}
       </select>
+      <div id="fAgotadas"></div>
       <label>Cantidad de entradas *</label>
       <select id="fQty">
         ${Array.from({length: Number(cfg.maxPorCompra || 10)}, (_, i) => i + 1)
@@ -1621,6 +1643,7 @@ function setupSellForm(cfg) {
   /* Vender 30 Early Bird seguidos no deberia obligar a elegir "Early Bird"
      30 veces. Se recuerda lo ultimo usado en ESTE dispositivo. */
   updateTotal();
+  filtrarAgotadas(cfg, sel, updateTotal);
   const dui = document.getElementById('fDui');
   if (dui) dui.addEventListener('input', e => {
     const pos = e.target.selectionStart;
@@ -1644,6 +1667,42 @@ function setupSellForm(cfg) {
 
   const b = document.getElementById('fBuyer'); if (b) b.focus();
 }
+/* Saca del selector los tipos sin cupo y muestra cuantos quedan en los
+   demas. Antes el embajador elegia una agotada, llenaba todo el formulario
+   y recien al guardar se enteraba. */
+async function filtrarAgotadas(cfg, sel, updateTotal) {
+  try {
+    const cs = await getDoc(doc(db, 'counters', 'tickets'));
+    const counts = (cs.exists() && cs.data().counts) || {};
+    let quitadas = 0, seleccionadaCayo = false;
+
+    for (let i = sel.options.length - 1; i >= 0; i--) {
+      const o = sel.options[i];
+      if (!o.value) continue;
+      const tt = cfg.ticketTypes.find(t => t.id === o.value);
+      if (!tt) continue;
+      const quedan = Number(tt.capacity || 0) - Number(counts[o.value] || 0);
+      if (quedan <= 0) {
+        if (o.selected) seleccionadaCayo = true;
+        o.remove();
+        quitadas++;
+      } else {
+        o.textContent = `${tt.name} - ${fmtMoney(tt.price)} · quedan ${quedan}`;
+        o.dataset.quedan = quedan;
+      }
+    }
+    if (seleccionadaCayo) { sel.selectedIndex = 0; updateTotal(); }
+
+    const aviso = document.getElementById('fAgotadas');
+    if (aviso) {
+      const vivas = [...sel.options].filter(o => o.value).length;
+      aviso.innerHTML = vivas === 0
+        ? '<div class="warn">No hay entradas disponibles en ningún tramo.</div>'
+        : (quitadas ? `<div class="info-note">${quitadas} tramo${quitadas>1?'s':''} agotado${quitadas>1?'s':''}, ya no aparece${quitadas>1?'n':''} en la lista.</div>` : '');
+    }
+  } catch (e) { /* sin conexion: mejor mostrar todo que bloquear la venta */ }
+}
+
 function remember(k, v) { try { localStorage.setItem('kr_' + k, v); } catch (e) {} }
 function recall(k) { try { return localStorage.getItem('kr_' + k); } catch (e) { return null; } }
 
@@ -1930,6 +1989,11 @@ async function previewWaTemplate() {
 async function autoBackup(ventas) {
   if (state.role !== 'admin') return;
   const dia = hoyStr();
+  /* Se ejecutaba en CADA actualizacion de la lista: una lectura y una
+     escritura del respaldo completo por cada venta registrada. Ahora, como
+     mucho, una vez cada media hora por dispositivo. */
+  const ultimo = Number(recall('backup_ts') || 0);
+  if (Date.now() - ultimo < 30 * 60 * 1000) return;
   try {
     const ref = doc(db, 'backups', dia);
     const prev = await getDoc(ref);
@@ -1948,6 +2012,7 @@ async function autoBackup(ventas) {
       columnas: 'idBoleto,nombre,dui,telefono,tipo,precio,embajador,fecha,ingresado',
       filas: JSON.stringify(filas)
     });
+    remember('backup_ts', String(Date.now()));
   } catch (e) {
     console.warn('backup', e);
     throw e;   // que el llamador decida si avisar al usuario
