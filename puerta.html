@@ -488,11 +488,12 @@ async function syncUp(silent=false){
    se guarda en el telefono. Si la senal se corta, la suscripcion muere
    pero la copia local queda intacta y el escaneo sigue funcionando.
    Al volver la senal se resuscribe y se pone al dia. */
-let _unsub=null;
+let _unsub=null, _primeraSync=true;
 async function startLiveSync(){
   if(!online() || _unsub) return;
   try{
     const {f,db}=await fb();
+    _primeraSync=true;
     _unsub = f.onSnapshot(f.collection(db,'ventas'), snap=>{
       /* SOLO LOS CAMBIOS, no la lista entera.
          Antes, cada ingreso de CUALQUIER equipo hacia que este reescribiera
@@ -535,6 +536,25 @@ async function startLiveSync(){
         else { S.all[i]=row; }
         tocados.push(row);
       });
+
+      /* PRIMERA sincronizacion de la sesion: la copia guardada en el telefono
+         puede traer ventas que ya se borraron del sistema (pruebas viejas,
+         duplicados corregidos). docChanges solo avisa de los borrados que
+         ocurren con el listener YA abierto, asi que la primera vez hay que
+         comparar contra la lista completa del servidor y descartar lo que
+         ya no existe. Sin esto, una entrada borrada seguiria escaneando
+         como valida y los contadores quedarian inflados. */
+      if(_primeraSync){
+        _primeraSync=false;
+        const vivos=new Set();
+        snap.forEach(d=>vivos.add(d.id));
+        const sobrantes=S.all.filter(v=>v && !vivos.has(v.idBoleto));
+        if(sobrantes.length){
+          S.all=S.all.filter(v=>v && vivos.has(v.idBoleto));
+          sobrantes.forEach(v=>idbDel('manifest',v.idBoleto).catch(()=>{}));
+          borrado=true;
+        }
+      }
 
       if(borrado) S.all=S.all.filter(Boolean);
       if(!tocados.length && !borrado) return;
