@@ -531,16 +531,33 @@ async function renderAdmin(app) {
     // Dos listeners en tiempo real compartiendo caché local, en vez de mezclar
     // un listener con un getDocs() de golpe cada vez que cambia el otro dato
     // (eso multiplicaba lecturas innecesarias contra la cuota gratis de Firestore).
-    let _cacheVentas = null, _cacheAmbs = null;
-    const tryRender = () => { if (_cacheVentas && _cacheAmbs) content.innerHTML = adminDashboard(cfg, _cacheAmbs, _cacheVentas); };
-    const unsubV = listenVentas(ventas => { _cacheVentas = ventas; tryRender(); autoBackup(ventas).catch(()=>{}); });
+    let _stats = null, _cacheAmbs = null;
+    const tryRender = () => { if (_stats && _cacheAmbs) content.innerHTML = adminDashboard(cfg, _cacheAmbs, _stats); };
+    const unsubC = onSnapshot(doc(db, 'counters', 'tickets'), snap => {
+      _stats = Object.assign({}, _stats || {}, snap.exists() ? snap.data() : {});
+      tryRender();
+    }, err => console.error('counters', err));
     const unsubA = listenAmbassadors(ambs => { _cacheAmbs = ambs; tryRender(); });
-    state.unsubs.push(unsubV, unsubA);
+    state.unsubs.push(unsubC, unsubA);
+    /* Aforo en vivo con una consulta de agregacion, que cuesta una lectura
+       por cada mil documentos en vez de una por documento. Se repite cada
+       30 s para que la noche del evento el numero suba solo en pantalla:
+       son ~2 lecturas cada vez, nada contra la cuota. */
+    const contarIngresados = () =>
+      getCountFromServer(query(collection(db, 'ventas'), where('ingresado', '==', true)))
+        .then(r => { _stats = Object.assign({}, _stats || {}, { ingresados: r.data().count }); tryRender(); })
+        .catch(() => {});
+    contarIngresados();
+    const tIng = setInterval(contarIngresados, 30000);
+    state.unsubs.push(() => clearInterval(tIng));
   } else if (state.adminTab === 'newsale') {
     content.innerHTML = ambassadorSellForm(cfg);
     setupSellForm(cfg);
   } else if (state.adminTab === 'sales') {
-    const unsubV = listenVentas(ventas => { content.innerHTML = adminSales(cfg, ventas); });
+    const unsubV = listenVentas(ventas => {
+      content.innerHTML = adminSales(cfg, ventas);
+      autoBackup(ventas).catch(()=>{});
+    });
     state.unsubs.push(unsubV);
   } else if (state.adminTab === 'access') {
     const unsubV = listenVentas(ventas => { content.innerHTML = adminAccess(cfg, ventas); });
@@ -565,20 +582,31 @@ async function renderAdmin(app) {
 }
 function setAdminTab(t) { state.adminTab = t; render(); }
 
-function adminDashboard(cfg, ambs, ventas) {
-  const totalRevenue = ventas.reduce((s,v) => s + Number(v.precio||0), 0);
-  const totalSold = ventas.length;
-  const totalChecked = ventas.filter(v => v.ingresado).length;
+/* El tablero se arma desde counters/tickets: UN documento en vez de las
+   1200 ventas. Eso baja cada carga del panel de ~1200 lecturas a 3, que es
+   lo que vuelve imposible volver a agotar la cuota diaria.
+   Los ingresados se cuentan con una consulta de agregacion, que cuesta una
+   lectura por cada mil documentos en vez de una por documento. */
+function adminDashboard(cfg, ambs, st) {
+  const c = st.counts || {}, ingr = st.ingresos || {};
+  const pe = st.porEmbajador || {}, ie = st.ingresosEmb || {};
+  const totalRevenue = Number(st.montoTotal || 0);
+  const totalSold = Number(st.total || 0);
+  const totalChecked = Number(st.ingresados || 0);
 
-  const byType = cfg.ticketTypes.map(tt => {
-    const sold = ventas.filter(v => v.ticketTypeId === tt.id);
-    return { ...tt, sold: sold.length, revenue: sold.reduce((s,v)=>s+Number(v.precio||0),0), remaining: Math.max(0, tt.capacity - sold.length) };
-  });
+  const byType = cfg.ticketTypes.map(tt => ({
+    ...tt,
+    sold: Number(c[tt.id] || 0),
+    revenue: Number(ingr[tt.id] || 0),
+    remaining: Math.max(0, tt.capacity - Number(c[tt.id] || 0))
+  }));
 
-  const byAmb = ambs.map(a => {
-    const vs = ventas.filter(v => v.ambassadorId === a.id);
-    return { ...a, sold: vs.length, revenue: vs.reduce((s,v)=>s+Number(v.precio||0),0), commission: vs.length * Number(a.commissionPerTicket||0) };
-  }).sort((a,b) => b.sold - a.sold);
+  const byAmb = ambs.map(a => ({
+    ...a,
+    sold: Number(pe[a.id] || 0),
+    revenue: Number(ie[a.id] || 0),
+    commission: Number(pe[a.id] || 0) * Number(a.commissionPerTicket || 0)
+  })).sort((a,b) => b.sold - a.sold);
 
   return `
     <div class="card">
@@ -721,8 +749,10 @@ function adminAccess(cfg, ventas) {
     </div>
     <div class="card">
       <h3>Registro de acceso (${ingresados.length})</h3>
+      ${sorted.length > 60 ? `<div class="info-note">Mostrando los últimos 60 ingresos.
+        El total de arriba sí cuenta a todos. Para la lista completa usá Exportar CSV en Ventas.</div>` : ''}
       ${sorted.length===0 ? '<div class="empty">Aún no ha ingresado nadie al evento.</div>' :
-        sorted.map(v => `<div class="list-item">
+        sorted.slice(0, 60).map(v => `<div class="list-item">
           <div class="list-item-main">
             <div class="list-item-title">${esc(v.nombreComprador)}</div>
             <div class="list-item-sub">
@@ -1209,7 +1239,8 @@ async function wipeSalesOnly() {
        borra porEmbajador, para que los cupos de cada vendedor vuelvan a
        cero junto con todo lo demas. */
     await setDoc(doc(db, 'counters', 'tickets'),
-      { counts: {}, porEmbajador: {}, total: 0 }, { merge: false });
+      { counts: {}, porEmbajador: {}, ingresos: {}, ingresosEmb: {},
+        total: 0, montoTotal: 0 }, { merge: false });
     toast(`Listo: ${ventas.length} ventas borradas. Tablero en cero.`);
     render();
   } catch (e) { toast('Error: ' + (e.message || e)); }
@@ -1238,7 +1269,8 @@ async function wipeAll() {
   await wipeCollection('checkins', chk.docs.map(d => d.id));
   await wipeCollection('ambassadors', ambs.map(a => a.id));
   await setDoc(doc(db, 'counters', 'tickets'),
-    { counts: {}, porEmbajador: {}, total: 0 }, { merge: false });
+    { counts: {}, porEmbajador: {}, ingresos: {}, ingresosEmb: {},
+        total: 0, montoTotal: 0 }, { merge: false });
   toast('Todo borrado'); render();
 }
 
@@ -2094,13 +2126,19 @@ async function saveAforo() {
 async function recalcCounters() {
   try {
     const ventas = await getVentas();
-    const counts = {}, porEmbajador = {};
+    const counts = {}, porEmbajador = {}, ingresos = {}, ingresosEmb = {};
+    let montoTotal = 0;
     ventas.forEach(v => {
       if (v.ticketTypeId) counts[v.ticketTypeId] = (counts[v.ticketTypeId] || 0) + 1;
       if (v.ambassadorId) porEmbajador[v.ambassadorId] = (porEmbajador[v.ambassadorId] || 0) + 1;
+      const m = Number(v.precio || 0);
+      montoTotal += m;
+      if (v.ticketTypeId) ingresos[v.ticketTypeId] = (ingresos[v.ticketTypeId] || 0) + m;
+      if (v.ambassadorId) ingresosEmb[v.ambassadorId] = (ingresosEmb[v.ambassadorId] || 0) + m;
     });
     await setDoc(doc(db, 'counters', 'tickets'),
-      { counts, porEmbajador, total: ventas.length }, { merge: false });
+      { counts, porEmbajador, ingresos, ingresosEmb, total: ventas.length, montoTotal },
+      { merge: false });
     toast(`Contadores recalculados: ${ventas.length} entradas`);
     render();
   } catch (e) { toast('Error: ' + (e.message || e)); }
@@ -2182,6 +2220,11 @@ async function submitSale() {
         const data = snap.exists() ? (snap.data() || {}) : {};
         const counts = Object.assign({}, data.counts || {});
         const porEmb = Object.assign({}, data.porEmbajador || {});
+        /* Se acumula tambien el DINERO, no solo la cantidad: con esto el
+           tablero se arma leyendo UN documento en vez de recorrer las 1200
+           ventas, que es lo que agotaba la cuota de lecturas. */
+        const ingr = Object.assign({}, data.ingresos || {});
+        const ingrEmb = Object.assign({}, data.ingresosEmb || {});
         const usado = Number(counts[tt.id] || 0);
         const total = Number(data.total || 0);
         const usadoAmb = Number(porEmb[state.userId] || 0);
@@ -2192,7 +2235,13 @@ async function submitSale() {
         }
         counts[tt.id] = usado + qty;
         porEmb[state.userId] = usadoAmb + qty;
-        tx.set(counterRef, { counts, porEmbajador: porEmb, total: total + qty }, { merge: true });
+        const monto = Number(tt.price || 0) * qty;
+        ingr[tt.id] = Number(ingr[tt.id] || 0) + monto;
+        ingrEmb[state.userId] = Number(ingrEmb[state.userId] || 0) + monto;
+        tx.set(counterRef, {
+          counts, porEmbajador: porEmb, ingresos: ingr, ingresosEmb: ingrEmb,
+          total: total + qty, montoTotal: Number(data.montoTotal || 0) + monto
+        }, { merge: true });
         sales.forEach(s => tx.set(doc(db, 'ventas', s.idBoleto), s));
       });
     } catch (te) {
@@ -2610,11 +2659,21 @@ async function deleteSale(idBoleto) {
       const data = cs.exists() ? (cs.data() || {}) : {};
       const counts = Object.assign({}, data.counts || {});
       const porEmb = Object.assign({}, data.porEmbajador || {});
-      if (v.ticketTypeId) counts[v.ticketTypeId] = Math.max(0, Number(counts[v.ticketTypeId] || 0) - 1);
-      if (v.ambassadorId) porEmb[v.ambassadorId] = Math.max(0, Number(porEmb[v.ambassadorId] || 0) - 1);
+      const ingr = Object.assign({}, data.ingresos || {});
+      const ingrEmb = Object.assign({}, data.ingresosEmb || {});
+      const monto = Number(v.precio || 0);
+      if (v.ticketTypeId) {
+        counts[v.ticketTypeId] = Math.max(0, Number(counts[v.ticketTypeId] || 0) - 1);
+        ingr[v.ticketTypeId] = Math.max(0, Number(ingr[v.ticketTypeId] || 0) - monto);
+      }
+      if (v.ambassadorId) {
+        porEmb[v.ambassadorId] = Math.max(0, Number(porEmb[v.ambassadorId] || 0) - 1);
+        ingrEmb[v.ambassadorId] = Math.max(0, Number(ingrEmb[v.ambassadorId] || 0) - monto);
+      }
       tx.set(counterRef, {
-        counts, porEmbajador: porEmb,
-        total: Math.max(0, Number(data.total || 0) - 1)
+        counts, porEmbajador: porEmb, ingresos: ingr, ingresosEmb: ingrEmb,
+        total: Math.max(0, Number(data.total || 0) - 1),
+        montoTotal: Math.max(0, Number(data.montoTotal || 0) - monto)
       }, { merge: true });
       tx.delete(doc(db, 'ventas', idBoleto));
     });

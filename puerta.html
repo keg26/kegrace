@@ -494,16 +494,33 @@ async function startLiveSync(){
   try{
     const {f,db}=await fb();
     _unsub = f.onSnapshot(f.collection(db,'ventas'), snap=>{
-      const local=new Map(S.all.map(v=>[v.idBoleto,v]));
-      const pendientes=new Set(S.queue.map(q=>q.idBoleto));
-      const rows=[];
-      snap.forEach(d=>{
-        const s=d.data(); const prev=local.get(d.id);
+      /* SOLO LOS CAMBIOS, no la lista entera.
+         Antes, cada ingreso de CUALQUIER equipo hacia que este reescribiera
+         las 1150 entradas en disco. Con 1200 personas eso son 1.38 millones
+         de escrituras por telefono, con la camara corriendo: el telefono se
+         traba justo en el pico de la fila. docChanges() entrega unicamente
+         los documentos que cambiaron — en la primera carga son todos, que es
+         lo que se quiere, y despues uno por ingreso. */
+      const pend=new Set(S.queue.map(q=>q.idBoleto));
+      const pos=new Map();
+      for(let i=0;i<S.all.length;i++) pos.set(S.all[i].idBoleto,i);
+      const tocados=[]; let borrado=false;
+
+      snap.docChanges().forEach(ch=>{
+        const id=ch.doc.id;
+        if(ch.type==='removed'){
+          const i=pos.get(id);
+          if(i!==undefined){ S.all[i]=null; borrado=true; }
+          return;
+        }
+        const s=ch.doc.data();
+        const i=pos.get(id);
+        const prev=(i===undefined)?null:S.all[i];
         /* Si este equipo tiene un ingreso sin subir, su version LOCAL manda:
            no dejamos que el servidor "desmarque" a alguien que ya entro. */
-        const localManda = prev && pendientes.has(d.id);
-        rows.push({
-          idBoleto:d.id, token:s.token||d.id,
+        const localManda = prev && pend.has(id);
+        const row={
+          idBoleto:id, token:s.token||id,
           nombreComprador:s.nombreComprador||'Sin nombre',
           dui:s.dui||'', telefono:s.telefono||'',
           tipoEntrada:s.tipoEntrada||'', precio:s.precio||0,
@@ -513,11 +530,17 @@ async function startLiveSync(){
           fechaIngreso: localManda ? prev.fechaIngreso
             : (s.fechaIngreso&&s.fechaIngreso.toMillis?s.fechaIngreso.toMillis():null),
           ingresoDevice: localManda ? prev.ingresoDevice : (s.ingresoDevice||'')
-        });
+        };
+        if(i===undefined){ pos.set(id,S.all.length); S.all.push(row); }
+        else { S.all[i]=row; }
+        tocados.push(row);
       });
-      S.all=rows; reindex();
+
+      if(borrado) S.all=S.all.filter(Boolean);
+      if(!tocados.length && !borrado) return;
+      reindex();
       S.lastSync=Date.now(); saveMeta();
-      idbBulk('manifest',rows).catch(()=>{});
+      idbBulk('manifest',tocados).catch(()=>{});
       refreshStrip();
     }, err=>{ _unsub=null; });
   }catch(e){ _unsub=null; }
